@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#7a3520">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Slipcast Timer</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+:root {
+  --clay:      #b85c38;
+  --clay-dark: #7a3520;
+  --bg:        #f4ede4;
+  --surface:   #ece3d8;
+  --card:      #ffffff;
+  --border:    #d6c9b8;
+  --text:      #281808;
+  --muted:     #7a6050;
+  --r:         14px;
+}
+
+body {
+  font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  min-height: 100svh;
+  /* prevent overscroll bounce from hiding header */
+  overscroll-behavior-y: none;
+}
+
+/* ── Header ─────────────────────────────────────────────────────── */
+.header {
+  background: var(--clay-dark);
+  color: #fff;
+  height: 54px;
+  /* account for iOS status bar in standalone mode */
+  padding: env(safe-area-inset-top) 16px 0;
+  height: calc(54px + env(safe-area-inset-top));
+  display: flex; align-items: center; justify-content: space-between;
+  position: sticky; top: 0; z-index: 200;
+  box-shadow: 0 2px 10px rgba(0,0,0,.28);
+}
+.header-brand { display: flex; align-items: center; gap: 8px; }
+.header-title { font-size: 1.1rem; font-weight: 700; letter-spacing: -.02em; }
+.header-title span { font-weight: 300; opacity: .7; }
+.header-right { display: flex; align-items: center; gap: 14px; }
+.header-count { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; opacity: .8; }
+.header-clock { font-size: 1.2rem; font-weight: 600; font-variant-numeric: tabular-nums; opacity: .9; }
+
+/* ── Layout ─────────────────────────────────────────────────────── */
+.wrap { max-width: 720px; margin: 0 auto; padding: 14px; }
+
+/* ── Models Panel ───────────────────────────────────────────────── */
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); margin-bottom: 14px; overflow: hidden; }
+.panel-head { padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; border-bottom: 1px solid transparent; }
+.panel-head:active { background: rgba(0,0,0,.04); }
+.panel.open .panel-head { border-bottom-color: var(--border); }
+.panel-title { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.panel-toggle { color: var(--muted); font-size: .8rem; transition: transform .2s; }
+.panel.open .panel-toggle { transform: rotate(180deg); }
+.panel-body { display: none; padding: 14px; flex-direction: column; gap: 12px; }
+.panel.open .panel-body { display: flex; }
+
+.models-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.model-chip { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; display: flex; align-items: center; gap: 8px; font-size: .85rem; }
+.chip-name { font-weight: 600; }
+.chip-meta { color: var(--muted); font-size: .72rem; margin-top: 1px; }
+.chip-btns { display: flex; gap: 2px; margin-left: 3px; }
+.ibtn { background: none; border: none; cursor: pointer; padding: 4px 6px; color: var(--muted); border-radius: 4px; font-size: .8rem; touch-action: manipulation; }
+.ibtn:active { background: var(--border); color: var(--text); }
+.ibtn.del:active { background: #fee; color: #c33; }
+
+.add-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; padding-top: 12px; border-top: 1px solid var(--border); }
+.fg { display: flex; flex-direction: column; gap: 4px; }
+.fg label { font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.fg input { border: 1px solid var(--border); border-radius: 7px; padding: 9px 11px; font-size: .9rem; background: var(--card); color: var(--text); outline: none; width: 180px; }
+.fg input.short { width: 90px; }
+.fg input:focus { border-color: var(--clay); box-shadow: 0 0 0 3px rgba(184,92,56,.12); }
+
+/* ── Buttons ────────────────────────────────────────────────────── */
+.btn { padding: 10px 18px; border-radius: 9px; font-size: .9rem; font-weight: 600; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; touch-action: manipulation; }
+.btn-primary { background: var(--clay); color: #fff; }
+.btn-primary:active { background: var(--clay-dark); }
+.btn-outline { background: transparent; border: 1.5px solid var(--clay); color: var(--clay); }
+.btn-outline:active { background: var(--clay); color: #fff; }
+.btn-ghost { background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+.btn-ghost:active { background: var(--border); }
+.btn-sm { padding: 7px 13px; font-size: .82rem; }
+
+/* ── Toolbar ────────────────────────────────────────────────────── */
+.toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.toolbar h2 { font-size: .82rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
+
+/* ── Timer Grid ─────────────────────────────────────────────────── */
+.timers-grid { display: flex; flex-direction: column; gap: 9px; }
+@media (min-width: 580px) {
+  .timers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 10px; }
+}
+
+.empty-state { text-align: center; padding: 48px 20px; color: var(--muted); }
+.empty-state h3 { font-size: 1.1rem; font-weight: 500; margin-bottom: 6px; }
+.empty-state p { font-size: .88rem; }
+.empty-hint { margin-top: 14px; display: inline-flex; align-items: center; gap: 6px; font-size: .78rem; color: var(--muted); background: var(--surface); padding: 6px 14px; border-radius: 20px; }
+
+/* ── Timer Card ─────────────────────────────────────────────────── */
+.tcard {
+  border-radius: var(--r);
+  overflow: hidden;
+  color: #fff;
+  box-shadow: 0 3px 14px rgba(0,0,0,.25);
+  transition: box-shadow .2s;
+}
+
+/* Pulse on ready/urgent */
+.tcard.phase-ready { animation: pulse-card 1.2s ease-in-out infinite; }
+.tcard.urgent      { animation: pulse-card .72s ease-in-out infinite; }
+.tcard.phase-done  { opacity: .72; box-shadow: 0 1px 6px rgba(0,0,0,.15); }
+
+@keyframes pulse-card {
+  0%,100% { box-shadow: 0 3px 14px rgba(0,0,0,.25); }
+  50%      { box-shadow: 0 0 0 7px rgba(255,255,255,.12), 0 3px 14px rgba(0,0,0,.2); }
+}
+
+/* ── Card: collapsed strip (always visible) ─────────────────────── */
+.tc-strip {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 13px 9px 9px;
+  min-height: 72px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.tc-strip:active { filter: brightness(.93); }
+
+/* Small progress ring (58×58) */
+.tc-ring { display: block; flex-shrink: 0; }
+
+/* Center text */
+.tc-mid { flex: 1; min-width: 0; }
+.tc-name {
+  font-size: 1.02rem; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-shadow: 0 1px 3px rgba(0,0,0,.22);
+  line-height: 1.2;
+}
+.tc-sub {
+  font-size: .66rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; opacity: .78; margin-top: 4px;
+}
+
+/* Big countdown */
+.tc-cd {
+  font-size: 1.85rem; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.03em;
+  text-shadow: 0 1px 4px rgba(0,0,0,.2);
+  flex-shrink: 0;
+  min-width: 72px;
+  text-align: right;
+}
+
+/* Chevron */
+.tc-chev {
+  font-size: .68rem; opacity: .65; flex-shrink: 0;
+  margin-left: 3px; transition: transform .22s;
+}
+.tc-chev.open { transform: rotate(180deg); }
+
+/* ── Card: expanded body ────────────────────────────────────────── */
+.tc-body {
+  background: rgba(0,0,0,.2);
+  border-top: 1px solid rgba(255,255,255,.13);
+  padding: 12px 13px 13px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+.tc-info-row {
+  font-size: .8rem; font-weight: 600; opacity: .88;
+}
+
+.tc-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* Buttons inside colored card */
+.tc-btn {
+  background: rgba(255,255,255,.88);
+  color: #1a1a1a;
+  font-weight: 700; font-size: .88rem;
+  padding: 9px 16px; border-radius: 9px; border: none;
+  cursor: pointer; touch-action: manipulation;
+}
+.tc-btn:active { background: #fff; }
+.tc-btn.ghost {
+  background: rgba(255,255,255,.18);
+  color: #fff;
+  border: 1.5px solid rgba(255,255,255,.42);
+}
+.tc-btn.ghost:active { background: rgba(255,255,255,.3); }
+
+/* Extension row */
+.tc-ext { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.tc-ext-lbl { font-size: .7rem; opacity: .72; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.tc-ext-btn {
+  background: rgba(255,255,255,.17);
+  border: 1px solid rgba(255,255,255,.38);
+  color: #fff; font-size: .82rem; font-weight: 700;
+  padding: 7px 13px; border-radius: 7px; cursor: pointer; touch-action: manipulation;
+}
+.tc-ext-btn:active { background: rgba(255,255,255,.32); }
+
+/* Delete */
+.tc-del {
+  background: rgba(0,0,0,.18);
+  border: 1px solid rgba(255,255,255,.18);
+  color: rgba(255,255,255,.72); font-size: .78rem; font-weight: 600;
+  padding: 6px 12px; border-radius: 7px; cursor: pointer; touch-action: manipulation;
+  align-self: flex-start;
+}
+.tc-del:active { background: rgba(0,0,0,.35); color: #fff; }
+
+/* ── Completed Section ──────────────────────────────────────────── */
+.done-section { margin-top: 20px; }
+.done-title { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 8px; }
+.done-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.done-chip { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; display: flex; align-items: center; gap: 7px; font-size: .82rem; }
+.done-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.done-time { color: var(--muted); font-size: .7rem; }
+.done-rm { background: none; border: none; cursor: pointer; color: var(--muted); font-size: .78rem; padding: 2px 4px; border-radius: 3px; touch-action: manipulation; }
+.done-rm:active { color: #c33; }
+
+/* ── Modal ──────────────────────────────────────────────────────── */
+.overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55);
+  display: none; align-items: flex-end; justify-content: center; z-index: 1000;
+}
+.overlay.open { display: flex; }
+@media (min-width: 520px) { .overlay { align-items: center; } }
+
+.modal {
+  background: var(--card);
+  border-radius: 20px 20px 0 0;
+  padding: 24px 20px calc(24px + env(safe-area-inset-bottom));
+  width: 100%; max-width: 480px;
+  box-shadow: 0 -8px 40px rgba(0,0,0,.2);
+  animation: slideUp .24s ease;
+}
+@media (min-width: 520px) {
+  .modal { border-radius: 18px; padding: 26px; animation: popIn .2s ease; }
+}
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes popIn   { from { opacity:0; transform:scale(.93); } to { opacity:1; transform:scale(1); } }
+
+.modal h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 18px; }
+.mf { display: flex; flex-direction: column; gap: 14px; }
+.mf .fg input, .mf select { width: 100%; }
+select {
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  font-size: .92rem; background: var(--card); color: var(--text); outline: none; cursor: pointer; width: 100%;
+}
+select:focus { border-color: var(--clay); }
+.color-picker { display: flex; flex-wrap: wrap; gap: 9px; }
+.cp-opt { width: 32px; height: 32px; border-radius: 50%; border: 3px solid transparent; cursor: pointer; transition: all .15s; touch-action: manipulation; }
+.cp-opt:active { transform: scale(1.1); }
+.cp-opt.sel { border-color: #1a1a1a; transform: scale(1.2); }
+.time-summary { font-size: .84rem; padding: 10px 12px; background: var(--surface); border-radius: 8px; display: none; line-height: 1.75; }
+.mf-foot { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+
+/* ── Toast (centered bottom, mobile friendly) ───────────────────── */
+.toasts {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 7px;
+  z-index: 2000; width: calc(100% - 28px); max-width: 360px;
+  pointer-events: none;
+}
+.toast {
+  background: #1e1208; color: #fff;
+  padding: 11px 16px; border-radius: 10px; font-size: .86rem;
+  box-shadow: 0 4px 18px rgba(0,0,0,.28);
+  animation: tsIn .28s ease;
+  text-align: center; pointer-events: auto;
+}
+.toast.warn { background: #7a1800; }
+.toast.ok   { background: #0e5028; }
+@keyframes tsIn { from { transform:translateY(14px); opacity:0; } to { transform:translateY(0); opacity:1; } }
+
+/* ── Mobile form stack ──────────────────────────────────────────── */
+@media (max-width: 500px) {
+  .add-form { flex-direction: column; }
+  .fg input, .fg input.short { width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-brand">
+    <svg width="22" height="22" viewBox="0 0 26 26" fill="none">
+      <ellipse cx="13" cy="19" rx="9" ry="5" fill="rgba(255,255,255,.25)"/>
+      <path d="M4 13 Q4 4 13 4 Q22 4 22 13" stroke="rgba(255,255,255,.9)" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <ellipse cx="13" cy="13" rx="9" ry="4" fill="rgba(255,255,255,.15)" stroke="rgba(255,255,255,.6)" stroke-width="1.5"/>
+    </svg>
+    <div class="header-title">Slipcast <span>Timer</span></div>
+  </div>
+  <div class="header-right">
+    <div class="header-count" id="hCount">0 ativos</div>
+    <div class="header-clock" id="clock">00:00:00</div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- LAN access hint (only shown when opened as local file) -->
+  <div id="lanHint" style="display:none;background:#1e4a7a;color:#fff;border-radius:10px;padding:11px 14px;margin-bottom:12px;font-size:.84rem;line-height:1.55">
+    📱 <strong>Para abrir no iPhone</strong> — Mac e celular na mesma rede WiFi, acesse:<br>
+    <span id="lanUrl" style="font-family:monospace;font-size:.9rem;background:rgba(255,255,255,.15);padding:2px 7px;border-radius:4px;display:inline-block;margin-top:4px"></span>
+  </div>
+
+  <!-- Models Panel -->
+  <div class="panel" id="modelsPanel">
+    <div class="panel-head" onclick="togglePanel()">
+      <span class="panel-title">Biblioteca de Modelos</span>
+      <span class="panel-toggle">▼</span>
+    </div>
+    <div class="panel-body">
+      <div class="models-list" id="modelsList"></div>
+      <div class="add-form">
+        <div class="fg">
+          <label>Nome do Modelo</label>
+          <input type="text" id="fName" placeholder="Ex: Xícara Grande" maxlength="40">
+        </div>
+        <div class="fg">
+          <label>Tempo Molde (min)</label>
+          <input type="number" id="fMold" class="short" placeholder="30" min="1" max="999">
+        </div>
+        <div class="fg">
+          <label>Tempo Demold (min)</label>
+          <input type="number" id="fDemold" class="short" placeholder="15" min="0" max="999">
+        </div>
+        <button class="btn btn-primary btn-sm" id="saveModelBtn" onclick="saveModel()">Salvar</button>
+        <button class="btn btn-ghost btn-sm" id="cancelEditBtn" onclick="cancelEdit()" style="display:none">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <h2>Timers Ativos</h2>
+    <button class="btn btn-primary" onclick="openModal()">+ Nova Peça</button>
+  </div>
+
+  <!-- Grid -->
+  <div class="timers-grid" id="grid"></div>
+
+  <!-- Completed -->
+  <div class="done-section" id="doneSection" style="display:none">
+    <div class="done-title">Concluídas Hoje</div>
+    <div class="done-list" id="doneList"></div>
+  </div>
+
+</div>
+
+<!-- Modal -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h3>Nova Peça</h3>
+    <div class="mf">
+      <div class="fg">
+        <label>Modelo</label>
+        <select id="mModel" onchange="onModelChange()">
+          <option value="">— Selecione um modelo —</option>
+        </select>
+      </div>
+      <div class="fg">
+        <label>Identificação (opcional)</label>
+        <input type="text" id="mLabel" placeholder="Ex: Molde A, Conjunto Café..." maxlength="40">
+      </div>
+      <div class="fg">
+        <label>Cor de Identificação</label>
+        <div class="color-picker" id="colorPicker"></div>
+      </div>
+      <div class="time-summary" id="timeSummary"></div>
+    </div>
+    <div class="mf-foot">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="startTimer()">▶ Iniciar</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+'use strict';
+
+/* ─── Palette ─────────────────────────────────────────────────── */
+const PAL = [
+  { id:0, c:'#e74c3c', n:'Vermelho'  },
+  { id:1, c:'#2980d9', n:'Azul'      },
+  { id:2, c:'#27ae60', n:'Verde'     },
+  { id:3, c:'#e67e22', n:'Laranja'   },
+  { id:4, c:'#8e44ad', n:'Roxo'      },
+  { id:5, c:'#16a085', n:'Turquesa'  },
+  { id:6, c:'#c0392b', n:'Carmim'    },
+  { id:7, c:'#d35400', n:'Terra'     },
+  { id:8, c:'#2471a3', n:'Marinho'   },
+  { id:9, c:'#1e8449', n:'Esmeralda' },
+];
+
+/* ─── State ───────────────────────────────────────────────────── */
+let models  = [];
+let timers  = [];
+let done    = [];
+let nextCol = 0;
+let editId  = null;
+let selCol  = 0;
+const expanded = new Set(); // which card IDs are expanded
+
+/* ─── Persistence ─────────────────────────────────────────────── */
+function save() {
+  try {
+    localStorage.setItem('sc_models',  JSON.stringify(models));
+    localStorage.setItem('sc_timers',  JSON.stringify(timers));
+    localStorage.setItem('sc_done',    JSON.stringify(done));
+    localStorage.setItem('sc_nextcol', nextCol);
+  } catch(e) {} // iOS private mode blocks localStorage
+}
+
+function load() {
+  try {
+    const m = localStorage.getItem('sc_models');
+    const t = localStorage.getItem('sc_timers');
+    const d = localStorage.getItem('sc_done');
+    const n = localStorage.getItem('sc_nextcol');
+    if (m) models  = JSON.parse(m);
+    if (t) timers  = JSON.parse(t);
+    if (d) done    = JSON.parse(d);
+    if (n) nextCol = parseInt(n) || 0;
+  } catch(e) {}
+  if (!models.length) models = [
+    { id: uid(), name: 'Xícara',     moldMin: 25, demoldMin: 12 },
+    { id: uid(), name: 'Pires',      moldMin: 20, demoldMin: 10 },
+    { id: uid(), name: 'Prato Raso', moldMin: 40, demoldMin: 20 },
+    { id: uid(), name: 'Tigela',     moldMin: 35, demoldMin: 18 },
+    { id: uid(), name: 'Vaso',       moldMin: 30, demoldMin: 15 },
+  ];
+}
+
+/* ─── Utilities ───────────────────────────────────────────────── */
+function uid() { return Math.random().toString(36).slice(2,9) + Date.now().toString(36); }
+function now()  { return Math.floor(Date.now() / 1000); }
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function col(id){ return PAL.find(p => p.id === id) || PAL[0]; }
+function pad(n) { return String(n).padStart(2,'0'); }
+
+function fmt(secs) {
+  if (secs <= 0) return '0:00';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function endsAt(ts) {
+  if (!ts) return '';
+  return new Date(ts * 1000).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+}
+
+/* ─── Audio ───────────────────────────────────────────────────── */
+let _ctx;
+function actx() {
+  if (!_ctx) _ctx = new (window.AudioContext || window.webkitAudioContext)();
+  return _ctx;
+}
+function beep(f, d, type='sine', vol=.35) {
+  try {
+    const c=actx(), o=c.createOscillator(), g=c.createGain();
+    o.connect(g); g.connect(c.destination); o.type=type; o.frequency.value=f;
+    g.gain.setValueAtTime(vol, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001, c.currentTime+d);
+    o.start(); o.stop(c.currentTime+d);
+  } catch(e){}
+}
+function alertSound() {
+  beep(900,.18); setTimeout(()=>beep(680,.22),220);
+  setTimeout(()=>beep(900,.18),520); setTimeout(()=>beep(680,.22),740);
+}
+function doneSound()  { beep(523,.13); setTimeout(()=>beep(659,.13),150); setTimeout(()=>beep(784,.25),300); }
+function startSound() { beep(600,.1,'sine',.2); }
+
+/* ─── Toast ───────────────────────────────────────────────────── */
+function toast(msg, type='', ms=3500) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (type ? ' '+type : '');
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => {
+    el.style.transition = 'opacity .3s, transform .3s';
+    el.style.opacity = '0'; el.style.transform = 'translateY(10px)';
+    setTimeout(() => el.remove(), 320);
+  }, ms);
+}
+
+/* ─── Phase computation ───────────────────────────────────────── */
+function phaseState(t) {
+  const model = models.find(m => m.id === t.modelId);
+  if (!model) return null;
+  const n = now();
+
+  if (t.phase === 'mold') {
+    const rem  = Math.max(0, t.moldEnd - n);
+    const tot  = Math.max(1, t.moldEnd - t.moldStart);
+    const prog = Math.min((n - t.moldStart) / tot, 1);
+    return { phase:'mold', rem, prog, urgent: rem > 0 && rem <= 60, model };
+  }
+  if (t.phase === 'ready') {
+    return { phase:'ready', rem:0, prog:1, urgent:false, model };
+  }
+  if (t.phase === 'demold') {
+    const rem  = Math.max(0, t.demoldEnd - n);
+    const tot  = Math.max(1, t.demoldEnd - t.demoldStart);
+    const prog = Math.min((n - t.demoldStart) / tot, 1);
+    return { phase:'demold', rem, prog, urgent: rem > 0 && rem <= 60, model };
+  }
+  if (t.phase === 'done') {
+    return { phase:'done', rem:0, prog:1, urgent:false, model };
+  }
+  return null;
+}
+
+/* ─── Alert loop ──────────────────────────────────────────────── */
+const _alerted = new Set();
+function checkAlerts() {
+  const n = now();
+  let changed = false;
+  timers.forEach(t => {
+    const key = `${t.id}-${t.phase}`;
+    if (t.phase === 'mold' && n >= t.moldEnd && !_alerted.has(key)) {
+      _alerted.add(key);
+      t.phase = 'ready';
+      expanded.add(t.id); // auto-expand when ready to demold
+      alertSound();
+      const model = models.find(m => m.id === t.modelId);
+      toast(`⚡ ${t.label || model?.name} — HORA DE DESMOLDAR!`, 'warn', 7000);
+      changed = true;
+    }
+    if (t.phase === 'demold' && n >= t.demoldEnd && !_alerted.has(key)) {
+      _alerted.add(key);
+      const model = models.find(m => m.id === t.modelId);
+      t.phase = 'done';
+      doneSound();
+      toast(`✅ ${t.label || model?.name} — PRONTA!`, 'ok', 5000);
+      changed = true;
+    }
+  });
+  if (changed) save();
+}
+
+/* ─── Timer actions ───────────────────────────────────────────── */
+window.toggleCard = function(id) {
+  const t = timers.find(x => x.id === id);
+  if (!t || t.phase === 'ready') return; // ready cards stay open
+  if (expanded.has(id)) expanded.delete(id);
+  else expanded.add(id);
+};
+
+window.confirmDemold = function(id) {
+  const t = timers.find(x => x.id === id); if (!t) return;
+  const model = models.find(m => m.id === t.modelId);
+  const n = now();
+  if (model && model.demoldMin > 0) {
+    t.phase = 'demold';
+    t.demoldStart = n;
+    t.demoldEnd   = n + model.demoldMin * 60;
+    expanded.delete(id);
+    toast(`Desmoldagem iniciada — ${t.label || model.name}`, '', 3000);
+  } else {
+    t.phase = 'done';
+    doneSound();
+    toast(`✅ ${t.label || model?.name} — Concluída!`, 'ok', 4000);
+  }
+  save();
+};
+
+// secs = seconds to add (30, 60 or 120)
+window.extendMold = function(id, secs) {
+  const t = timers.find(x => x.id === id && x.phase === 'mold'); if (!t) return;
+  t.moldEnd += secs; save();
+  const lbl = secs < 60 ? `+${secs}s` : `+${secs / 60} min`;
+  toast(`${lbl} adicionados ao molde`, '', 2200);
+};
+
+window.skipDemold = function(id) {
+  const t = timers.find(x => x.id === id); if (!t) return;
+  t.phase = 'done'; doneSound(); save();
+  toast('Peça marcada como concluída', '', 3000);
+};
+
+window.removeTimer = function(id) {
+  timers = timers.filter(x => x.id !== id);
+  expanded.delete(id);
+  save();
+};
+
+window.archiveDone = function(id) {
+  const t = timers.find(x => x.id === id); if (!t) return;
+  const model = models.find(m => m.id === t.modelId);
+  done.unshift({
+    id: t.id, color: t.color,
+    label: t.label || model?.name || 'Peça',
+    at: new Date().toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' })
+  });
+  if (done.length > 20) done = done.slice(0, 20);
+  removeTimer(id);
+};
+
+window.removeDone = function(id) { done = done.filter(x => x.id !== id); save(); renderDone(); };
+
+/* ─── Model CRUD ──────────────────────────────────────────────── */
+window.saveModel = function() {
+  const name      = document.getElementById('fName').value.trim();
+  const moldMin   = parseInt(document.getElementById('fMold').value)   || 0;
+  const demoldMin = parseInt(document.getElementById('fDemold').value) || 0;
+  if (!name || moldMin < 1) { toast('Preencha o nome e o tempo no molde.'); return; }
+  if (editId) {
+    const idx = models.findIndex(m => m.id === editId);
+    if (idx >= 0) models[idx] = { ...models[idx], name, moldMin, demoldMin };
+    editId = null;
+    document.getElementById('saveModelBtn').textContent = 'Salvar';
+    document.getElementById('cancelEditBtn').style.display = 'none';
+  } else {
+    models.push({ id: uid(), name, moldMin, demoldMin });
+  }
+  ['fName','fMold','fDemold'].forEach(id => document.getElementById(id).value = '');
+  save(); renderModels();
+};
+
+window.editModel = function(id) {
+  const m = models.find(x => x.id === id); if (!m) return;
+  document.getElementById('fName').value   = m.name;
+  document.getElementById('fMold').value   = m.moldMin;
+  document.getElementById('fDemold').value = m.demoldMin;
+  editId = id;
+  document.getElementById('saveModelBtn').textContent = 'Atualizar';
+  document.getElementById('cancelEditBtn').style.display = '';
+  document.getElementById('modelsPanel').classList.add('open');
+  document.getElementById('fName').focus();
+};
+
+window.cancelEdit = function() {
+  editId = null;
+  ['fName','fMold','fDemold'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('saveModelBtn').textContent = 'Salvar';
+  document.getElementById('cancelEditBtn').style.display = 'none';
+};
+
+window.deleteModel = function(id) {
+  if (!confirm('Excluir este modelo?')) return;
+  models = models.filter(m => m.id !== id); save(); renderModels();
+};
+
+/* ─── Modal ───────────────────────────────────────────────────── */
+window.openModal = function() {
+  if (!models.length) {
+    toast('Adicione um modelo primeiro.');
+    document.getElementById('modelsPanel').classList.add('open');
+    return;
+  }
+  selCol = nextCol % PAL.length;
+  const sel = document.getElementById('mModel');
+  sel.innerHTML = '<option value="">— Selecione um modelo —</option>';
+  models.forEach(m => {
+    const o = document.createElement('option');
+    o.value = m.id; o.textContent = m.name; sel.appendChild(o);
+  });
+  document.getElementById('mLabel').value = '';
+  document.getElementById('timeSummary').style.display = 'none';
+
+  const picker = document.getElementById('colorPicker');
+  picker.innerHTML = '';
+  PAL.forEach(p => {
+    const d = document.createElement('div');
+    d.className = 'cp-opt' + (p.id === selCol ? ' sel' : '');
+    d.style.background = p.c; d.title = p.n; d.tabIndex = 0;
+    d.onclick = () => pickColor(p.id);
+    d.onkeydown = e => e.key === 'Enter' && pickColor(p.id);
+    picker.appendChild(d);
+  });
+  document.getElementById('overlay').classList.add('open');
+};
+
+window.closeModal = function() { document.getElementById('overlay').classList.remove('open'); };
+
+function pickColor(id) {
+  selCol = id;
+  document.querySelectorAll('.cp-opt').forEach((el, i) => el.classList.toggle('sel', PAL[i].id === id));
+}
+
+window.onModelChange = function() {
+  const id  = document.getElementById('mModel').value;
+  const box = document.getElementById('timeSummary');
+  if (!id) { box.style.display = 'none'; return; }
+  const m = models.find(x => x.id === id);
+  if (!m) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  box.innerHTML = `<strong>${esc(m.name)}</strong><br>
+    ⏱ No molde: <strong>${m.moldMin} min</strong>
+    &nbsp;·&nbsp;
+    🕐 Desmoldagem: <strong>${m.demoldMin > 0 ? m.demoldMin+' min' : '—'}</strong>`;
+};
+
+window.startTimer = function() {
+  const modelId = document.getElementById('mModel').value;
+  const label   = document.getElementById('mLabel').value.trim();
+  if (!modelId) { toast('Selecione um modelo.'); return; }
+  const model = models.find(m => m.id === modelId); if (!model) return;
+  const n = now();
+  timers.push({
+    id: uid(), modelId, label,
+    color: selCol, phase: 'mold',
+    moldStart: n, moldEnd: n + model.moldMin * 60,
+  });
+  nextCol = (nextCol + 1) % PAL.length;
+  save(); closeModal(); startSound();
+  toast(`Iniciado: ${label || model.name}`, '', 2500);
+};
+
+/* ─── Card render ─────────────────────────────────────────────── */
+const SR = 24;                         // ring radius
+const SC = 2 * Math.PI * SR;          // ≈ 150.8 circumference
+
+function cardHTML(t) {
+  const s = phaseState(t); if (!s) return '';
+  const { phase, rem, prog, urgent, model } = s;
+  const clr = col(t.color);
+  const label = t.label || model.name;
+  const isExpanded = expanded.has(t.id) || phase === 'ready';
+
+  // Ring progress arc
+  const sOffset = (SC * (1 - Math.min(prog, 1))).toFixed(1);
+  const arcColor = phase === 'done' ? 'rgba(255,255,255,.38)' : 'rgba(255,255,255,.92)';
+
+  // Countdown text
+  const cdText = phase === 'done' ? '✓' : phase === 'ready' ? '00:00' : fmt(rem);
+
+  // Phase sub-label
+  const subLabels = { mold:'No Molde', ready:'⚡ Desmoldar!', demold:'Desmoldagem', done:'Concluída ✓' };
+  const subLabel = subLabels[phase] + (urgent && phase !== 'ready' ? ' ⚡' : '');
+
+  // Card class
+  let cardClass = 'tcard';
+  if      (phase === 'ready')  cardClass += ' phase-ready';
+  else if (phase === 'done')   cardClass += ' phase-done';
+  else if (urgent)             cardClass += ' urgent';
+
+  // Expanded body content
+  let bodyHTML = '';
+  if (isExpanded) {
+    let inner = '';
+    if (phase === 'mold') {
+      inner = `
+        <div class="tc-info-row">Desmoldar às ${endsAt(t.moldEnd)}</div>
+        <div class="tc-ext">
+          <span class="tc-ext-lbl">+ tempo:</span>
+          <button class="tc-ext-btn" onclick="extendMold('${t.id}',30)">+30s</button>
+          <button class="tc-ext-btn" onclick="extendMold('${t.id}',60)">+1 min</button>
+          <button class="tc-ext-btn" onclick="extendMold('${t.id}',120)">+2 min</button>
+        </div>`;
+    } else if (phase === 'ready') {
+      inner = `
+        <div class="tc-info-row" style="font-size:.92rem;opacity:1;font-weight:700">
+          ⚡ Hora de retirar do molde
+        </div>
+        <button class="tc-btn" onclick="confirmDemold('${t.id}')">
+          ✔ Confirmar Desmoldagem
+        </button>`;
+    } else if (phase === 'demold') {
+      inner = `
+        <div class="tc-info-row">Pronta às ${endsAt(t.demoldEnd)}</div>
+        <button class="tc-btn ghost" onclick="skipDemold('${t.id}')">Marcar como pronta</button>`;
+    } else if (phase === 'done') {
+      inner = `
+        <div class="tc-info-row">Peça finalizada</div>
+        <button class="tc-btn" onclick="archiveDone('${t.id}')">Arquivar</button>`;
+    }
+    bodyHTML = `<div class="tc-body">
+      <div class="tc-acts">${inner}</div>
+      <button class="tc-del" onclick="removeTimer('${t.id}')">✕ Remover timer</button>
+    </div>`;
+  }
+
+  return `<div class="${cardClass}" id="tc-${t.id}" style="background:${clr.c}">
+    <div class="tc-strip" onclick="toggleCard('${t.id}')">
+      <svg class="tc-ring" width="58" height="58" viewBox="0 0 58 58">
+        <circle cx="29" cy="29" r="${SR}" fill="none" stroke="rgba(0,0,0,.2)" stroke-width="4.5"/>
+        <circle cx="29" cy="29" r="${SR}" fill="none"
+          stroke="${arcColor}" stroke-width="4.5" stroke-linecap="round"
+          stroke-dasharray="${SC.toFixed(1)}" stroke-dashoffset="${sOffset}"
+          transform="rotate(-90 29 29)"
+          style="transition:stroke-dashoffset .8s ease"/>
+      </svg>
+      <div class="tc-mid">
+        <div class="tc-name">${esc(label)}</div>
+        <div class="tc-sub">${subLabel}</div>
+      </div>
+      <div class="tc-cd">${cdText}</div>
+      <div class="tc-chev${isExpanded ? ' open' : ''}">▼</div>
+    </div>
+    ${bodyHTML}
+  </div>`;
+}
+
+/* ─── Render all ──────────────────────────────────────────────── */
+function renderModels() {
+  const el = document.getElementById('modelsList');
+  if (!models.length) {
+    el.innerHTML = '<span style="color:var(--muted);font-size:.85rem">Nenhum modelo ainda.</span>';
+    return;
+  }
+  el.innerHTML = models.map(m => `
+    <div class="model-chip">
+      <div>
+        <div class="chip-name">${esc(m.name)}</div>
+        <div class="chip-meta">Molde: ${m.moldMin}min · Demold: ${m.demoldMin > 0 ? m.demoldMin+'min' : '—'}</div>
+      </div>
+      <div class="chip-btns">
+        <button class="ibtn" onclick="editModel('${m.id}')" title="Editar">✏️</button>
+        <button class="ibtn del" onclick="deleteModel('${m.id}')" title="Excluir">🗑</button>
+      </div>
+    </div>`).join('');
+}
+
+function renderTimers() {
+  const grid = document.getElementById('grid');
+  const hc   = document.getElementById('hCount');
+  const active = timers.filter(t => t.phase !== 'done');
+
+  hc.textContent = active.length === 1 ? '1 ativo' : `${active.length} ativos`;
+
+  if (!timers.length) {
+    grid.innerHTML = `<div class="empty-state">
+      <h3>Nenhum timer ativo</h3>
+      <p>Toque em "+ Nova Peça" para começar.</p>
+      <div class="empty-hint">💡 Vários timers rodam ao mesmo tempo</div>
+    </div>`;
+    return;
+  }
+
+  const phOrd = { ready:0, mold:1, demold:2, done:9 };
+  const sorted = [...timers].sort((a, b) => {
+    const pa = phaseState(a), pb = phaseState(b);
+    if (!pa || !pb) return 0;
+    const ao = phOrd[pa.phase] - (pa.urgent ? 0.5 : 0);
+    const bo = phOrd[pb.phase] - (pb.urgent ? 0.5 : 0);
+    if (ao !== bo) return ao - bo;
+    return pa.rem - pb.rem;
+  });
+
+  grid.innerHTML = sorted.map(t => cardHTML(t)).join('');
+  renderDone();
+}
+
+function renderDone() {
+  const sec = document.getElementById('doneSection');
+  const lst = document.getElementById('doneList');
+  if (!done.length) { sec.style.display = 'none'; return; }
+  sec.style.display = 'block';
+  lst.innerHTML = done.map(d => `
+    <div class="done-chip">
+      <div class="done-dot" style="background:${col(d.color).c}"></div>
+      <span>${esc(d.label)}</span>
+      <span class="done-time">${d.at}</span>
+      <button class="done-rm" onclick="removeDone('${d.id}')">✕</button>
+    </div>`).join('');
+}
+
+function updateClock() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('pt-BR');
+}
+
+window.togglePanel = function() {
+  document.getElementById('modelsPanel').classList.toggle('open');
+};
+
+/* ─── Main loop ───────────────────────────────────────────────── */
+function tick() { updateClock(); checkAlerts(); renderTimers(); }
+
+load();
+renderModels();
+tick();
+setInterval(tick, 1000);
+
+// Show LAN hint when opened as local file (file:// protocol)
+if (window.location.protocol === 'file:') {
+  const hint = document.getElementById('lanHint');
+  const urlEl = document.getElementById('lanUrl');
+  hint.style.display = 'block';
+  urlEl.textContent = 'http://192.168.0.112:7720/slipcast-timer.html';
+}
+
+/* ─── Keyboard shortcuts ──────────────────────────────────────── */
+document.addEventListener('keydown', e => {
+  const tag = document.activeElement?.tagName;
+  if (['INPUT','SELECT','TEXTAREA'].includes(tag)) return;
+  if (e.key === 'n' || e.key === 'N') openModal();
+  if (e.key === 'Escape') closeModal();
+  if (e.key === 'm' || e.key === 'M') togglePanel();
+});
+
+document.getElementById('overlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+['fName','fMold','fDemold'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') saveModel();
+  });
+});
+</script>
+</body>
+</html>

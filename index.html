@@ -473,18 +473,39 @@ function endsAt(ts) {
 
 /* ─── Audio ───────────────────────────────────────────────────── */
 let _ctx;
+
+// iOS Safari bloqueia AudioContext até interação do usuário.
+// Esta função cria e desbloqueia o contexto; deve ser chamada em todo toque.
+function unlockAudio() {
+  try {
+    if (!_ctx) {
+      _ctx = new (window.AudioContext || window.webkitAudioContext)();
+      // Toca buffer silencioso para desbloquear no iOS
+      const buf = _ctx.createBuffer(1, 1, 22050);
+      const src = _ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(_ctx.destination);
+      src.start(0);
+    }
+    if (_ctx.state === 'suspended') _ctx.resume();
+  } catch(e) {}
+}
+
 function actx() {
-  if (!_ctx) _ctx = new (window.AudioContext || window.webkitAudioContext)();
+  unlockAudio();
   return _ctx;
 }
+
 function beep(f, d, type='sine', vol=.35) {
   try {
-    const c=actx(), o=c.createOscillator(), g=c.createGain();
+    const c = actx();
+    if (!c || c.state === 'suspended') return;
+    const o=c.createOscillator(), g=c.createGain();
     o.connect(g); g.connect(c.destination); o.type=type; o.frequency.value=f;
     g.gain.setValueAtTime(vol, c.currentTime);
     g.gain.exponentialRampToValueAtTime(.001, c.currentTime+d);
     o.start(); o.stop(c.currentTime+d);
-  } catch(e){}
+  } catch(e) {}
 }
 function alertSound() {
   beep(900,.18); setTimeout(()=>beep(680,.22),220);
@@ -915,6 +936,10 @@ document.addEventListener('keydown', e => {
 document.getElementById('overlay').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeModal();
 });
+
+// iOS: desbloqueia AudioContext em qualquer toque na tela
+document.addEventListener('touchstart', unlockAudio, { passive: true });
+document.addEventListener('touchend',   unlockAudio, { passive: true });
 
 ['fName','fMold','fDemold'].forEach(id => {
   document.getElementById(id).addEventListener('keydown', e => {

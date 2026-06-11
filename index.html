@@ -606,7 +606,7 @@ function checkAlerts() {
       alarming.add(t.id);
       startAlarmLoop();
       const model = models.find(m => m.id === t.modelId);
-      toast(`⚡ ${t.label || model?.name} — HORA DE DESMOLDAR!`, 'warn', 7000);
+      toast(`⚡ ${t.label || model?.name} — HORA DE ESVAZIAR O MOLDE!`, 'warn', 7000);
       changed = true;
     }
     if (t.phase === 'demold' && n >= t.demoldEnd && !_alerted.has(key)) {
@@ -615,7 +615,7 @@ function checkAlerts() {
       t.phase = 'done';
       alarming.add(t.id);
       startAlarmLoop();
-      toast(`✅ ${t.label || model?.name} — PRONTA! Toque no card para confirmar.`, 'ok', 7000);
+      toast(`⚡ ${t.label || model?.name} — HORA DE DESMOLDAR! Toque no card para confirmar.`, 'warn', 7000);
       changed = true;
     }
   });
@@ -646,7 +646,7 @@ window.confirmDemold = function(id) {
     t.demoldStart = n;
     t.demoldEnd   = n + model.demoldMin * 60;
     expanded.delete(id);
-    toast(`Desmoldagem iniciada — ${t.label || model.name}`, '', 3000);
+    toast(`Secando — aguardando desmoldagem: ${t.label || model.name}`, '', 3000);
   } else {
     t.phase = 'done';
     doneSound();
@@ -666,7 +666,7 @@ window.extendMold = function(id, secs) {
 window.skipDemold = function(id) {
   const t = timers.find(x => x.id === id); if (!t) return;
   t.phase = 'done'; doneSound(); save();
-  toast('Peça marcada como concluída', '', 3000);
+  toast('Pronta para desmoldar', '', 3000);
 };
 
 window.removeTimer = function(id) {
@@ -820,7 +820,7 @@ function cardHTML(t) {
   const cdText = phase === 'done' ? '✓' : phase === 'ready' ? '00:00' : fmt(rem);
 
   // Phase sub-label
-  const subLabels = { mold:'No Molde', ready:'⚡ Desmoldar!', demold:'Desmoldagem', done:'Concluída ✓' };
+  const subLabels = { mold:'No Molde', ready:'⚡ Esvaziar Molde!', demold:'Secando', done:'⚡ Desmoldar!' };
   const subLabel = isAlarming
     ? '⚡ Toque para parar o alarme'
     : subLabels[phase] + (urgent && phase !== 'ready' ? ' ⚡' : '');
@@ -838,7 +838,7 @@ function cardHTML(t) {
     let inner = '';
     if (phase === 'mold') {
       inner = `
-        <div class="tc-info-row">Desmoldar às ${endsAt(t.moldEnd)}</div>
+        <div class="tc-info-row">Esvaziar molde às ${endsAt(t.moldEnd)}</div>
         <div class="tc-ext">
           <span class="tc-ext-lbl">+ tempo:</span>
           <button class="tc-ext-btn" onclick="extendMold('${t.id}',30)">+30s</button>
@@ -848,19 +848,19 @@ function cardHTML(t) {
     } else if (phase === 'ready') {
       inner = `
         <div class="tc-info-row" style="font-size:.92rem;opacity:1;font-weight:700">
-          ⚡ Hora de retirar do molde
+          ⚡ Hora de esvaziar o molde
         </div>
         <button class="tc-btn" onclick="confirmDemold('${t.id}')">
-          ✔ Confirmar Desmoldagem
+          ✔ Molde Esvaziado
         </button>`;
     } else if (phase === 'demold') {
       inner = `
-        <div class="tc-info-row">Pronta às ${endsAt(t.demoldEnd)}</div>
-        <button class="tc-btn ghost" onclick="skipDemold('${t.id}')">Marcar como pronta</button>`;
+        <div class="tc-info-row">Desmoldar às ${endsAt(t.demoldEnd)}</div>
+        <button class="tc-btn ghost" onclick="skipDemold('${t.id}')">Desmoldar agora</button>`;
     } else if (phase === 'done') {
       inner = `
-        <div class="tc-info-row">Peça finalizada</div>
-        <button class="tc-btn" onclick="archiveDone('${t.id}')">Arquivar</button>`;
+        <div class="tc-info-row" style="font-size:.92rem;opacity:1;font-weight:700">⚡ Hora de desmoldar</div>
+        <button class="tc-btn" onclick="archiveDone('${t.id}')">✔ Desmoldada</button>`;
     }
     bodyHTML = `<div class="tc-body">
       <div class="tc-acts">${inner}</div>

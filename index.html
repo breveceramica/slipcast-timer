@@ -119,10 +119,15 @@ body {
 .tcard.phase-ready { animation: pulse-card 1.2s ease-in-out infinite; }
 .tcard.urgent      { animation: pulse-card .72s ease-in-out infinite; }
 .tcard.phase-done  { opacity: .72; box-shadow: 0 1px 6px rgba(0,0,0,.15); }
+.tcard.alarming    { animation: alarm-flash .42s ease-in-out infinite !important; }
 
 @keyframes pulse-card {
   0%,100% { box-shadow: 0 3px 14px rgba(0,0,0,.25); }
   50%      { box-shadow: 0 0 0 7px rgba(255,255,255,.12), 0 3px 14px rgba(0,0,0,.2); }
+}
+@keyframes alarm-flash {
+  0%,100% { box-shadow: 0 3px 14px rgba(0,0,0,.25); filter: brightness(1); }
+  50%      { box-shadow: 0 0 0 14px rgba(255,255,255,.22), 0 3px 20px rgba(0,0,0,.3); filter: brightness(1.22); }
 }
 
 /* ── Card: collapsed strip (always visible) ─────────────────────── */
@@ -474,32 +479,23 @@ function endsAt(ts) {
 /* ─── Audio ───────────────────────────────────────────────────── */
 let _ctx;
 
-// iOS Safari bloqueia AudioContext até interação do usuário.
-// Esta função cria e desbloqueia o contexto; deve ser chamada em todo toque.
 function unlockAudio() {
   try {
     if (!_ctx) {
       _ctx = new (window.AudioContext || window.webkitAudioContext)();
-      // Toca buffer silencioso para desbloquear no iOS
       const buf = _ctx.createBuffer(1, 1, 22050);
       const src = _ctx.createBufferSource();
-      src.buffer = buf;
-      src.connect(_ctx.destination);
-      src.start(0);
+      src.buffer = buf; src.connect(_ctx.destination); src.start(0);
     }
     if (_ctx.state === 'suspended') _ctx.resume();
   } catch(e) {}
 }
 
-function actx() {
-  unlockAudio();
-  return _ctx;
-}
+function actx() { unlockAudio(); return _ctx; }
 
 function beep(f, d, type='sine', vol=.35) {
   try {
-    const c = actx();
-    if (!c || c.state === 'suspended') return;
+    const c = actx(); if (!c || c.state === 'suspended') return;
     const o=c.createOscillator(), g=c.createGain();
     o.connect(g); g.connect(c.destination); o.type=type; o.frequency.value=f;
     g.gain.setValueAtTime(vol, c.currentTime);
@@ -507,12 +503,55 @@ function beep(f, d, type='sine', vol=.35) {
     o.start(); o.stop(c.currentTime+d);
   } catch(e) {}
 }
-function alertSound() {
-  beep(900,.18); setTimeout(()=>beep(680,.22),220);
-  setTimeout(()=>beep(900,.18),520); setTimeout(()=>beep(680,.22),740);
+
+// Alarme forte com DynamicsCompressor para máximo volume
+function alarmBeep() {
+  try {
+    const c = actx(); if (!c || c.state === 'suspended') return;
+    const comp = c.createDynamicsCompressor();
+    comp.threshold.value = -6; comp.knee.value = 0;
+    comp.ratio.value = 20; comp.attack.value = 0.001; comp.release.value = 0.1;
+    comp.connect(c.destination);
+    const tone = (freq, start, dur) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.connect(g); g.connect(comp);
+      o.type = 'square'; o.frequency.value = freq;
+      const t0 = c.currentTime + start;
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(1.0, t0 + 0.008);
+      g.gain.setValueAtTime(1.0, t0 + dur - 0.008);
+      g.gain.linearRampToValueAtTime(0, t0 + dur);
+      o.start(t0); o.stop(t0 + dur + 0.02);
+    };
+    tone(1050, 0,    0.11);
+    tone(1050, 0.16, 0.11);
+    tone(1050, 0.32, 0.11);
+    tone(800,  0.52, 0.17);
+    tone(800,  0.74, 0.17);
+  } catch(e) {}
 }
-function doneSound()  { beep(523,.13); setTimeout(()=>beep(659,.13),150); setTimeout(()=>beep(784,.25),300); }
+
+// Alarme contínuo — toca a cada 3.5s até alarming ficar vazio
+const alarming = new Set();
+let _alarmInterval = null;
+
+function startAlarmLoop() {
+  if (_alarmInterval) return;
+  alarmBeep();
+  _alarmInterval = setInterval(() => {
+    if (alarming.size === 0) { clearInterval(_alarmInterval); _alarmInterval = null; return; }
+    alarmBeep();
+  }, 3500);
+}
+
+function stopAlarmIfSilent() {
+  if (alarming.size === 0 && _alarmInterval) {
+    clearInterval(_alarmInterval); _alarmInterval = null;
+  }
+}
+
 function startSound() { beep(600,.1,'sine',.2); }
+function doneSound()  { beep(523,.13); setTimeout(()=>beep(659,.13),150); setTimeout(()=>beep(784,.25),300); }
 
 /* ─── Toast ───────────────────────────────────────────────────── */
 function toast(msg, type='', ms=3500) {
@@ -564,8 +603,8 @@ function checkAlerts() {
     if (t.phase === 'mold' && n >= t.moldEnd && !_alerted.has(key)) {
       _alerted.add(key);
       t.phase = 'ready';
-      expanded.add(t.id); // auto-expand when ready to demold
-      alertSound();
+      alarming.add(t.id);
+      startAlarmLoop();
       const model = models.find(m => m.id === t.modelId);
       toast(`⚡ ${t.label || model?.name} — HORA DE DESMOLDAR!`, 'warn', 7000);
       changed = true;
@@ -574,8 +613,9 @@ function checkAlerts() {
       _alerted.add(key);
       const model = models.find(m => m.id === t.modelId);
       t.phase = 'done';
-      doneSound();
-      toast(`✅ ${t.label || model?.name} — PRONTA!`, 'ok', 5000);
+      alarming.add(t.id);
+      startAlarmLoop();
+      toast(`✅ ${t.label || model?.name} — PRONTA! Toque no card para confirmar.`, 'ok', 7000);
       changed = true;
     }
   });
@@ -584,8 +624,15 @@ function checkAlerts() {
 
 /* ─── Timer actions ───────────────────────────────────────────── */
 window.toggleCard = function(id) {
-  const t = timers.find(x => x.id === id);
-  if (!t || t.phase === 'ready') return; // ready cards stay open
+  const t = timers.find(x => x.id === id); if (!t) return;
+  // Toque em card com alarme ativo: para o alarme e expande
+  if (alarming.has(id)) {
+    alarming.delete(id);
+    stopAlarmIfSilent();
+    expanded.add(id);
+    return;
+  }
+  if (t.phase === 'ready') return; // ready sem alarme: fica aberto
   if (expanded.has(id)) expanded.delete(id);
   else expanded.add(id);
 };
@@ -625,6 +672,8 @@ window.skipDemold = function(id) {
 window.removeTimer = function(id) {
   timers = timers.filter(x => x.id !== id);
   expanded.delete(id);
+  alarming.delete(id);
+  stopAlarmIfSilent();
   save();
 };
 
@@ -760,6 +809,7 @@ function cardHTML(t) {
   const { phase, rem, prog, urgent, model } = s;
   const clr = col(t.color);
   const label = t.label || model.name;
+  const isAlarming = alarming.has(t.id);
   const isExpanded = expanded.has(t.id) || phase === 'ready';
 
   // Ring progress arc
@@ -771,11 +821,14 @@ function cardHTML(t) {
 
   // Phase sub-label
   const subLabels = { mold:'No Molde', ready:'⚡ Desmoldar!', demold:'Desmoldagem', done:'Concluída ✓' };
-  const subLabel = subLabels[phase] + (urgent && phase !== 'ready' ? ' ⚡' : '');
+  const subLabel = isAlarming
+    ? '⚡ Toque para parar o alarme'
+    : subLabels[phase] + (urgent && phase !== 'ready' ? ' ⚡' : '');
 
   // Card class
   let cardClass = 'tcard';
-  if      (phase === 'ready')  cardClass += ' phase-ready';
+  if      (isAlarming)         cardClass += ' alarming';
+  else if (phase === 'ready')  cardClass += ' phase-ready';
   else if (phase === 'done')   cardClass += ' phase-done';
   else if (urgent)             cardClass += ' urgent';
 

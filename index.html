@@ -6,6 +6,9 @@
 <meta name="theme-color" content="#7a3520">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Slipcast">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>Slipcast Timer</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -399,6 +402,15 @@ select:focus { border-color: var(--clay); }
 </div>
 
 <div class="toasts" id="toasts"></div>
+
+<!-- PWA install banner (Android: auto; iOS: manual hint) -->
+<div id="installBanner" style="display:none;position:fixed;bottom:0;left:0;right:0;background:#5a2010;color:#fff;padding:13px 16px calc(13px + env(safe-area-inset-bottom));display:none;align-items:center;justify-content:space-between;gap:10px;z-index:3000;box-shadow:0 -3px 14px rgba(0,0,0,.28)">
+  <span id="installMsg" style="font-size:.86rem;line-height:1.4"></span>
+  <div style="display:flex;gap:8px;flex-shrink:0">
+    <button id="installBtn" style="display:none;background:#fff;color:#5a2010;border:none;padding:9px 16px;border-radius:8px;font-weight:700;font-size:.84rem;cursor:pointer;touch-action:manipulation" onclick="doInstall()">Instalar</button>
+    <button style="background:transparent;color:rgba(255,255,255,.65);border:none;padding:8px 10px;cursor:pointer;font-size:1rem;touch-action:manipulation" onclick="dismissBanner()">✕</button>
+  </div>
+</div>
 
 <script>
 'use strict';
@@ -999,6 +1011,47 @@ document.addEventListener('touchend',   unlockAudio, { passive: true });
     if (e.key === 'Enter') saveModel();
   });
 });
+
+/* ─── PWA ─────────────────────────────────────────────────────── */
+let _installPrompt = null;
+
+function showBanner(msg, showBtn) {
+  const b = document.getElementById('installBanner');
+  document.getElementById('installMsg').textContent = msg;
+  document.getElementById('installBtn').style.display = showBtn ? '' : 'none';
+  b.style.display = 'flex';
+}
+
+window.doInstall = function() {
+  if (!_installPrompt) return;
+  _installPrompt.prompt();
+  _installPrompt.userChoice.then(() => { _installPrompt = null; dismissBanner(); });
+};
+
+window.dismissBanner = function() {
+  document.getElementById('installBanner').style.display = 'none';
+  try { localStorage.setItem('sc_pwa_dismissed', '1'); } catch(e) {}
+};
+
+// Android: intercept install prompt
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  _installPrompt = e;
+  if (!localStorage.getItem('sc_pwa_dismissed')) {
+    showBanner('📲 Instalar o Slipcast Timer como app?', true);
+  }
+});
+
+// iOS Safari: show manual instructions once
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.navigator.standalone;
+if (isIOS && !localStorage.getItem('sc_pwa_dismissed')) {
+  showBanner('📲 Para instalar: toque em  ⎙  → "Adicionar à Tela de Início"', false);
+}
+
+// Register service worker
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/slipcast-timer/sw.js').catch(() => {});
+}
 </script>
 </body>
 </html>

@@ -1413,6 +1413,12 @@ function scheduleWake() {
 /* Liga/desliga o loop silencioso conforme existam timers, e escreve o card
    da tela de bloqueio. */
 function syncSound() {
+  // Rede de segurança: o som só pode continuar se houver peça em alarme.
+  // Sem isso, qualquer caminho que esvazie `alarming` sem passar por
+  // stopAlarmIfSilent() deixaria o alarme tocando para sempre, sem card
+  // na tela para silenciar.
+  if (Sound.ringing && !alarming.size) Sound.stopRing();
+
   if (!timers.length) {
     // nada para alarmar: limpa o estado de bloqueio para não alertar à toa,
     // e rearma o aviso caso o problema volte a acontecer na próxima peça

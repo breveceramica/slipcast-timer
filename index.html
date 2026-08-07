@@ -388,7 +388,10 @@ select:focus { border-color: var(--clay); }
   <!-- Toolbar -->
   <div class="toolbar">
     <h2>Timers Ativos</h2>
-    <button class="btn btn-primary" onclick="openModal()">+ Nova Peça</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-ghost btn-sm" onclick="testarAlarme()" title="Dispara um alarme em 15s para você conferir com a tela bloqueada">🔔 Testar</button>
+      <button class="btn btn-primary" onclick="openModal()">+ Nova Peça</button>
+    </div>
   </div>
 
   <!-- Grid -->
@@ -508,6 +511,7 @@ function uid() { return Math.random().toString(36).slice(2,9) + Date.now().toStr
 function now()  { return Math.floor(Date.now() / 1000); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function col(id){ return PAL.find(p => p.id === id) || PAL[0]; }
+window.__visiveis = function() { return models.filter(m => !m.teste); };
 function nomeDe(t) {
   const m = models.find(x => x.id === t.modelId);
   return t.label || (m && m.name) || 'Peça';
@@ -845,8 +849,8 @@ function renderBell() {
   if (!bgAlarm) {
     b.textContent = '🔕'; b.className = 'hbtn off';
     b.title = 'Alarme em segundo plano desativado';
-  } else if (Sound.blocked) {
-    // ligado, mas o áudio de fundo não está rodando de fato
+  } else if (Sound.blocked && timers.length) {
+    // há timer correndo, mas o áudio de fundo não está rodando de fato
     b.textContent = '🔔'; b.className = 'hbtn alerta';
     b.title = 'Toque na tela para ativar o alarme de tela bloqueada';
   } else {
@@ -1128,7 +1132,7 @@ window.deleteModel = function(id) {
 
 /* ─── Modal ───────────────────────────────────────────────────── */
 window.openModal = function() {
-  if (!models.length) {
+  if (!window.__visiveis().length) {
     toast('Adicione um modelo primeiro.');
     document.getElementById('modelsPanel').classList.add('open');
     return;
@@ -1136,7 +1140,7 @@ window.openModal = function() {
   selCol = nextCol % PAL.length;
   const sel = document.getElementById('mModel');
   sel.innerHTML = '<option value="">— Selecione um modelo —</option>';
-  models.forEach(m => {
+  window.__visiveis().forEach(m => {
     const o = document.createElement('option');
     o.value = m.id; o.textContent = m.name; sel.appendChild(o);
   });
@@ -1194,6 +1198,31 @@ window.startTimer = function() {
   Sound.arm(true);
   askNotify();
   toast(`Iniciado: ${label || model.name}`, '', 2500);
+};
+
+/* ─── Teste do alarme ─────────────────────────────────────────────
+ * O comportamento de tela bloqueada depende do aparelho e não dá para
+ * conferir sem esperar uma peça real. Este botão dispara o alarme de
+ * verdade em 15s para o usuário bloquear a tela e confirmar. */
+function modeloTeste() {
+  let m = models.find(x => x.teste);
+  if (!m) { m = { id: '__teste', name: 'Teste de alarme', moldMin: 1, demoldMin: 0, teste: true }; models.push(m); }
+  return m;
+}
+
+window.testarAlarme = function() {
+  // este clique é o gesto que libera áudio e permite pedir a notificação
+  userReady = true;
+  Sound.arm(true);
+  askNotify();
+  const m = modeloTeste();
+  const n = now();
+  timers.push({
+    id: uid(), modelId: m.id, label: 'Teste de alarme',
+    color: 6, phase: 'mold', moldStart: n, moldEnd: n + 15,
+  });
+  save(); tick();
+  toast('Bloqueie a tela agora — o alarme toca em 15 segundos', 'ok', 9000);
 };
 
 /* ─── Card render ─────────────────────────────────────────────── */
@@ -1288,6 +1317,7 @@ function cardHTML(t) {
 /* ─── Render all ──────────────────────────────────────────────── */
 function renderModels() {
   const el = document.getElementById('modelsList');
+  const models = window.__visiveis();   // esconde o modelo interno de teste
   if (!models.length) {
     el.innerHTML = '<span style="color:var(--muted);font-size:.85rem">Nenhum modelo ainda.</span>';
     return;
@@ -1383,6 +1413,12 @@ function scheduleWake() {
 /* Liga/desliga o loop silencioso conforme existam timers, e escreve o card
    da tela de bloqueio. */
 function syncSound() {
+  if (!timers.length) {
+    // nada para alarmar: limpa o estado de bloqueio para não alertar à toa,
+    // e rearma o aviso caso o problema volte a acontecer na próxima peça
+    if (Sound.blocked) { Sound.blocked = false; renderBell(); }
+    Sound._avisou = false;
+  }
   if (bgAlarm && userReady && timers.length && !Sound.armed) Sound.arm();
   if (Sound.armed && !timers.length && !Sound.ringing) Sound.disarm();
   if (!Sound.armed) return;

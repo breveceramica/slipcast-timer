@@ -7,8 +7,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Slipcast">
+<meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <title>Slipcast Timer</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -53,6 +55,27 @@ body {
 .header-right { display: flex; align-items: center; gap: 14px; }
 .header-count { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; opacity: .8; }
 .header-clock { font-size: 1.2rem; font-weight: 600; font-variant-numeric: tabular-nums; opacity: .9; }
+.hbtn {
+  background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.25);
+  color: #fff; width: 34px; height: 34px; border-radius: 9px;
+  font-size: 1rem; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: manipulation; flex-shrink: 0;
+}
+.hbtn:active { background: rgba(255,255,255,.32); }
+.hbtn.off { opacity: .42; }
+
+/* ── Barra de alarme tocando ────────────────────────────────────── */
+.alarm-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 3000;
+  display: none; cursor: pointer; text-align: center;
+  color: #fff; font-size: 1rem; font-weight: 700;
+  padding: 16px 18px calc(16px + env(safe-area-inset-bottom));
+  box-shadow: 0 -4px 24px rgba(0,0,0,.4);
+  animation: pulse-bar 1s ease-in-out infinite;
+}
+.alarm-bar.on { display: block; }
+@keyframes pulse-bar { 0%,100% { background:#c0392b; } 50% { background:#e74c3c; } }
 
 /* ── Layout ─────────────────────────────────────────────────────── */
 .wrap { max-width: 720px; margin: 0 auto; padding: 14px; }
@@ -316,6 +339,7 @@ select:focus { border-color: var(--clay); }
     <div class="header-title">Slipcast <span>Timer</span></div>
   </div>
   <div class="header-right">
+    <button class="hbtn" id="bellBtn" onclick="toggleBgAlarm()" title="Alarme com a tela bloqueada">🔔</button>
     <div class="header-count" id="hCount">0 ativos</div>
     <div class="header-clock" id="clock">00:00:00</div>
   </div>
@@ -323,10 +347,10 @@ select:focus { border-color: var(--clay); }
 
 <div class="wrap">
 
-  <!-- LAN access hint (only shown when opened as local file) -->
+  <!-- Aviso quando aberto direto do arquivo (sem HTTPS não há notificação) -->
   <div id="lanHint" style="display:none;background:#1e4a7a;color:#fff;border-radius:10px;padding:11px 14px;margin-bottom:12px;font-size:.84rem;line-height:1.55">
-    📱 <strong>Para abrir no iPhone</strong> — Mac e celular na mesma rede WiFi, acesse:<br>
-    <span id="lanUrl" style="font-family:monospace;font-size:.9rem;background:rgba(255,255,255,.15);padding:2px 7px;border-radius:4px;display:inline-block;margin-top:4px"></span>
+    ⚠️ <strong>Aberto como arquivo local</strong> — o alarme sonoro funciona, mas
+    notificações do sistema exigem HTTPS. Use o endereço publicado do app.
   </div>
 
   <!-- Models Panel -->
@@ -401,6 +425,8 @@ select:focus { border-color: var(--clay); }
   </div>
 </div>
 
+<div class="alarm-bar" id="alarmBar" onclick="stopAlarm()">🔔 Alarme tocando — toque para parar</div>
+
 <div class="toasts" id="toasts"></div>
 
 <!-- PWA install banner (Android: auto; iOS: manual hint) -->
@@ -436,6 +462,8 @@ let done    = [];
 let nextCol = 0;
 let editId  = null;
 let selCol  = 0;
+let bgAlarm = true;    // alarme toca com a tela bloqueada
+let userReady = false; // já houve um toque na tela (libera o áudio)
 const expanded = new Set(); // which card IDs are expanded
 
 /* ─── Persistence ─────────────────────────────────────────────── */
@@ -454,10 +482,12 @@ function load() {
     const t = localStorage.getItem('sc_timers');
     const d = localStorage.getItem('sc_done');
     const n = localStorage.getItem('sc_nextcol');
+    const b = localStorage.getItem('sc_bgalarm');
     if (m) models  = JSON.parse(m);
     if (t) timers  = JSON.parse(t);
     if (d) done    = JSON.parse(d);
     if (n) nextCol = parseInt(n) || 0;
+    if (b !== null) bgAlarm = b === '1';
   } catch(e) {}
   if (!models.length) models = [
     { id: uid(), name: 'Xícara',     moldMin: 25, demoldMin: 12 },
@@ -473,6 +503,10 @@ function uid() { return Math.random().toString(36).slice(2,9) + Date.now().toStr
 function now()  { return Math.floor(Date.now() / 1000); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function col(id){ return PAL.find(p => p.id === id) || PAL[0]; }
+function nomeDe(t) {
+  const m = models.find(x => x.id === t.modelId);
+  return t.label || (m && m.name) || 'Peça';
+}
 function pad(n) { return String(n).padStart(2,'0'); }
 
 function fmt(secs) {
@@ -488,7 +522,325 @@ function endsAt(ts) {
   return new Date(ts * 1000).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
 }
 
-/* ─── Audio ───────────────────────────────────────────────────── */
+/* ─── Audio ───────────────────────────────────────────────────────
+ * Para o alarme tocar com o APARELHO BLOQUEADO (iOS e Android) o som precisa
+ * sair de um elemento <audio> — não do Web Audio API. Motivos:
+ *   · o AudioContext é suspenso assim que a tela apaga;
+ *   · no iPhone, o Web Audio é silenciado pela chavinha de silencioso,
+ *     enquanto um <audio> toca normalmente.
+ *
+ * Estratégia (funciona em Safari/iOS e Chrome/Android):
+ *   1. Um ÚNICO elemento <audio> toca um loop silencioso enquanto houver timer
+ *      ativo. Isso mantém a sessão de mídia do sistema aberta: o navegador não
+ *      congela a página, então os timers continuam correndo de tela apagada.
+ *   2. Na hora do alarme trocamos o src desse MESMO elemento pelo som do
+ *      alarme. Trocar o src de um elemento que já está tocando é permitido em
+ *      segundo plano; criar um elemento novo, não.
+ *   3. O alarmBeep() do Web Audio fica como plano B (desktop, ou se o
+ *      elemento for bloqueado por falta de toque do usuário).
+ * ─────────────────────────────────────────────────────────────── */
+
+const RATE = 22050;
+
+/* Gera um WAV (mono 16-bit) a partir de amostras e devolve uma blob URL */
+function encodeWav(samples) {
+  const len = samples.length;
+  const buf = new ArrayBuffer(44 + len * 2);
+  const dv  = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, 'RIFF');  dv.setUint32(4, 36 + len * 2, true);  str(8, 'WAVE');
+  str(12, 'fmt '); dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, RATE, true); dv.setUint32(28, RATE * 2, true);
+  dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  str(36, 'data'); dv.setUint32(40, len * 2, true);
+  for (let i = 0; i < len; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    dv.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+/* Renderiza uma sequência de bipes {at, dur, f, v} em um buffer de totalSec */
+function renderTones(seq, totalSec) {
+  const n = Math.round(totalSec * RATE);
+  const out = new Float32Array(n);
+  seq.forEach(t => {
+    const start = Math.round(t.at * RATE);
+    const count = Math.round(t.dur * RATE);
+    const w = 2 * Math.PI * t.f;
+    for (let i = 0; i < count; i++) {
+      const idx = start + i; if (idx >= n) break;
+      const s = i / RATE;
+      const env = Math.min(1, s / .006) * Math.min(1, (count - i) / (RATE * .02));
+      // fundamental + 2º harmônico: mais audível em alto-falante de celular
+      out[idx] += (Math.sin(w * s) + .35 * Math.sin(2 * w * s)) / 1.35 * (t.v || .82) * env;
+    }
+  });
+  for (let i = 0; i < n; i++) out[i] = Math.max(-1, Math.min(1, out[i]));
+  return out;
+}
+
+/* ─── Capa do alarme na tela de bloqueio ─────────────────────────
+ * O card de mídia do sistema aceita uma imagem. Desenhamos no canvas um
+ * cartão com a cor da peça e o nome dela — é isso que aparece grande na
+ * tela bloqueada, e também vira o ícone da notificação. */
+const _artCache = {};
+
+function wrapText(g, text, maxW) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const out = []; let cur = '';
+  words.forEach(w => {
+    const t = cur ? cur + ' ' + w : w;
+    if (!cur || g.measureText(t).width <= maxW) cur = t;
+    else { out.push(cur); cur = w; }
+  });
+  if (cur) out.push(cur);
+  return out;
+}
+
+function artFor(hex, big, small) {
+  const key = hex + '|' + big + '|' + small;
+  if (_artCache[key]) return _artCache[key];
+  try {
+    const S = 512, F = ' -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif';
+    const c = document.createElement('canvas'); c.width = c.height = S;
+    const g = c.getContext('2d');
+
+    g.fillStyle = hex; g.fillRect(0, 0, S, S);
+    const grad = g.createLinearGradient(0, 0, 0, S);
+    grad.addColorStop(0, 'rgba(255,255,255,.20)');
+    grad.addColorStop(1, 'rgba(0,0,0,.26)');
+    g.fillStyle = grad; g.fillRect(0, 0, S, S);
+
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = 'rgba(255,255,255,.88)';
+    g.font = '700 36px' + F;
+    g.fillText(small, S / 2, 112);
+
+    let size = 96, linhas = [];
+    for (; size >= 40; size -= 6) {
+      g.font = '800 ' + size + 'px' + F;
+      linhas = wrapText(g, big, S - 72);
+      if (linhas.length <= 2) break;
+    }
+    if (linhas.length > 2) linhas = linhas.slice(0, 2);
+    g.fillStyle = '#fff';
+    const lh = size * 1.16;
+    const y0 = S / 2 + 34 - (linhas.length - 1) * lh / 2;
+    linhas.forEach((l, i) => g.fillText(l, S / 2, y0 + i * lh));
+
+    const url = c.toDataURL('image/png');
+    if (Object.keys(_artCache).length > 16) for (const k in _artCache) delete _artCache[k];
+    _artCache[key] = url;
+    return url;
+  } catch(e) { return null; }
+}
+
+const SND = {};
+function buildSounds() {
+  // 1s de "silêncio" (amplitude mínima, inaudível) — mantém a sessão viva
+  const sil = new Float32Array(RATE);
+  for (let i = 0; i < sil.length; i++) sil[i] = (i % 2 ? 1 : -1) * 0.00004;
+  SND.silence = encodeWav(sil);
+
+  // Alarme: 3s pensados para tocar em loop contínuo
+  SND.alert = encodeWav(renderTones([
+    { at: .00, dur: .20, f: 988 }, { at: .24, dur: .24, f: 740 },
+    { at: .56, dur: .20, f: 988 }, { at: .80, dur: .30, f: 740 },
+    { at: 1.30, dur: .20, f: 988 }, { at: 1.54, dur: .24, f: 740 },
+    { at: 1.86, dur: .20, f: 988 }, { at: 2.10, dur: .32, f: 740 },
+  ], 3.0));
+}
+
+const Sound = {
+  el: null, ready: false, armed: false, ringing: false,
+  _switching: false, _metaKey: '',
+
+  init() {
+    if (this.ready) return;
+    try {
+      buildSounds();
+      const el = new Audio();
+      el.preload = 'auto';
+      el.loop = true;
+      el.src = SND.silence;
+      // pausa vinda do sistema (lockscreen, fones) = usuário quer parar
+      el.addEventListener('pause', () => {
+        if (this.armed && !this._switching) { this.armed = false; renderBell(); }
+      });
+      this.el = el;
+      this.ready = true;
+    } catch(e) {}
+  },
+
+  _play(src, loop) {
+    this.init();
+    const el = this.el; if (!el) return null;
+    this._switching = true;
+    let p = null;
+    try {
+      if (el.src !== src) el.src = src;
+      el.loop = loop;
+      el.volume = 1;
+      try { el.currentTime = 0; } catch(e) {}
+      p = el.play();
+    } catch(e) {}
+    const done = () => { this._switching = false; };
+    if (p && p.then) p.then(done, done); else setTimeout(done, 0);
+    return p;
+  },
+
+  /* Liga o loop silencioso — precisa ser chamado a partir de um toque */
+  arm() {
+    if (!bgAlarm) return;
+    this.init();
+    this.armed = true;
+    if (!this.ringing) {
+      const p = this._play(SND.silence, true);
+      if (p && p.catch) p.catch(() => {});
+    }
+    this.session();
+    renderBell();
+  },
+
+  disarm() {
+    this.armed = false;
+    this.ringing = false;
+    showAlarmBar(false);
+    try { if (this.el) this.el.pause(); } catch(e) {}
+    try { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none'; } catch(e) {}
+    this._metaKey = '';
+    renderBell();
+  },
+
+  /* Toca em loop até stopRing() — o alarme não desiste sozinho, por decisão
+     de projeto: no ateliê a peça estraga se ninguém atender. */
+  ring() {
+    this.init();
+    const p = this._play(SND.alert, true);
+    if (p && p.catch) p.catch(() => alarmBeep());   // plano B: Web Audio
+    if (!p) alarmBeep();
+    this.ringing = true;
+    showAlarmBar(true);
+    buzz([400, 180, 400, 180, 600]);
+    this.session();
+  },
+
+  stopRing() {
+    if (!this.ringing) return;
+    this.ringing = false;
+    showAlarmBar(false);
+    this.rest();
+  },
+
+  /* Estado de repouso: silêncio se ainda houver timer ativo, senão pausa */
+  rest() {
+    if (this.armed && timers.length) this._play(SND.silence, true);
+    else { try { if (this.el) this.el.pause(); } catch(e) {} }
+  },
+
+  session() {
+    if (!('mediaSession' in navigator)) return;
+    try {
+      navigator.mediaSession.playbackState = 'playing';
+      navigator.mediaSession.setActionHandler('play',  () => Sound.arm());
+      navigator.mediaSession.setActionHandler('pause', () => Sound.ringing ? pararAlarmes() : Sound.disarm());
+      navigator.mediaSession.setActionHandler('stop',  () => Sound.disarm());
+    } catch(e) {}
+  },
+
+  /* Card exibido na tela de bloqueio */
+  meta(title, sub, art) {
+    if (!('mediaSession' in navigator) || !window.MediaMetadata) return;
+    const key = title + '|' + sub + '|' + (art ? art.length : 0);
+    if (key === this._metaKey) return;
+    this._metaKey = key;
+    try {
+      const md = { title, artist: sub, album: 'Slipcast Timer' };
+      if (art) md.artwork = [{ src: art, sizes: '512x512', type: 'image/png' }];
+      navigator.mediaSession.metadata = new MediaMetadata(md);
+    } catch(e) {}
+  },
+};
+
+/* ─── Vibração e notificação ─────────────────────────────────────
+ * Notificações só funcionam em contexto seguro (HTTPS). No Chrome/Android é
+ * obrigatório passar pelo service worker; no iOS, o app precisa estar
+ * adicionado à Tela de Início. */
+function buzz(pattern) { try { navigator.vibrate && navigator.vibrate(pattern); } catch(e) {} }
+
+let _swReg = null;
+
+function initNotify() {
+  if (!window.isSecureContext || !('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('sw.js')
+    .then(r => { _swReg = r; return navigator.serviceWorker.ready; })
+    .then(r => { _swReg = r || _swReg; })
+    .catch(() => {});
+}
+
+function askNotify() {
+  try {
+    if (!('Notification' in window) || Notification.permission !== 'default') return;
+    Notification.requestPermission().then(p => {
+      if (p === 'granted') toast('🔔 Notificações ativadas', 'ok', 3000);
+    }).catch(() => {});
+  } catch(e) {}
+}
+
+function notify(title, body, art) {
+  try {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    if (!document.hidden) return;   // app à vista: o card na tela já avisa
+    const opts = {
+      body, tag: 'slipcast', renotify: true, requireInteraction: true,
+      vibrate: [400, 180, 400, 180, 600], silent: false,
+    };
+    if (art) { opts.icon = art; opts.badge = art; }
+    if (_swReg && _swReg.showNotification) { _swReg.showNotification(title, opts); return; }
+    const n = new Notification(title, opts);   // desktop
+    n.onclick = () => { try { window.focus(); } catch(e) {} n.close(); };
+  } catch(e) {}
+}
+
+/* ─── Controles do alarme em segundo plano ──────────────────────── */
+function showAlarmBar(on) {
+  const el = document.getElementById('alarmBar');
+  if (el) el.classList.toggle('on', !!on);
+}
+
+// Silencia todos os alarmes ativos (barra vermelha, controle da tela de bloqueio)
+function pararAlarmes() {
+  alarming.clear();
+  stopAlarmIfSilent();
+}
+window.stopAlarm = pararAlarmes;
+
+function renderBell() {
+  const b = document.getElementById('bellBtn'); if (!b) return;
+  b.textContent = bgAlarm ? '🔔' : '🔕';
+  b.classList.toggle('off', !bgAlarm);
+  b.title = bgAlarm
+    ? 'Alarme toca com a tela bloqueada (ativado)'
+    : 'Alarme em segundo plano desativado';
+}
+
+window.toggleBgAlarm = function() {
+  bgAlarm = !bgAlarm;
+  try { localStorage.setItem('sc_bgalarm', bgAlarm ? '1' : '0'); } catch(e) {}
+  if (bgAlarm) {
+    Sound.arm();
+    askNotify();
+    toast('🔔 Alarme com a tela bloqueada ATIVADO', 'ok', 4000);
+  } else {
+    Sound.disarm();
+    toast('Alarme em segundo plano desativado', '', 3000);
+  }
+  renderBell();
+};
+
+/* ─── Plano B: Web Audio (desktop / se o <audio> for bloqueado) ── */
 let _ctx;
 
 function unlockAudio() {
@@ -543,23 +895,18 @@ function alarmBeep() {
   } catch(e) {}
 }
 
-// Alarme contínuo — toca a cada 3.5s até alarming ficar vazio
+// Alarme contínuo — toca até `alarming` ficar vazio (toque no card ou na barra).
+// O som em si vem do elemento <audio> (Sound.ring), que é o que sobrevive à
+// tela bloqueada; o alarmBeep() do Web Audio entra só se aquele for bloqueado.
 const alarming = new Set();
-let _alarmInterval = null;
 
 function startAlarmLoop() {
-  if (_alarmInterval) return;
-  alarmBeep();
-  _alarmInterval = setInterval(() => {
-    if (alarming.size === 0) { clearInterval(_alarmInterval); _alarmInterval = null; return; }
-    alarmBeep();
-  }, 3500);
+  if (Sound.ringing) return;   // já tocando: o loop cobre todos os alarmes
+  Sound.ring();
 }
 
 function stopAlarmIfSilent() {
-  if (alarming.size === 0 && _alarmInterval) {
-    clearInterval(_alarmInterval); _alarmInterval = null;
-  }
+  if (alarming.size === 0) Sound.stopRing();
 }
 
 function startSound() { beep(600,.1,'sine',.2); }
@@ -617,17 +964,21 @@ function checkAlerts() {
       t.phase = 'ready';
       alarming.add(t.id);
       startAlarmLoop();
-      const model = models.find(m => m.id === t.modelId);
-      toast(`⚡ ${t.label || model?.name} — HORA DE ESVAZIAR O MOLDE!`, 'warn', 7000);
+      const nome = nomeDe(t);
+      notify('⚡ Hora de esvaziar o molde!', nome,
+             artFor(col(t.color).c, nome, 'ESVAZIAR O MOLDE'));
+      toast(`⚡ ${nome} — HORA DE ESVAZIAR O MOLDE!`, 'warn', 7000);
       changed = true;
     }
     if (t.phase === 'demold' && n >= t.demoldEnd && !_alerted.has(key)) {
       _alerted.add(key);
-      const model = models.find(m => m.id === t.modelId);
+      const nome = nomeDe(t);
       t.phase = 'done';
       alarming.add(t.id);
       startAlarmLoop();
-      toast(`⚡ ${t.label || model?.name} — HORA DE DESMOLDAR! Toque no card para confirmar.`, 'warn', 7000);
+      notify('⚡ Hora de desmoldar!', nome,
+             artFor(col(t.color).c, nome, 'HORA DE DESMOLDAR'));
+      toast(`⚡ ${nome} — HORA DE DESMOLDAR! Toque no card para confirmar.`, 'warn', 7000);
       changed = true;
     }
   });
@@ -809,6 +1160,10 @@ window.startTimer = function() {
   });
   nextCol = (nextCol + 1) % PAL.length;
   save(); closeModal(); startSound();
+  // este clique é o gesto do usuário que libera o áudio em segundo plano
+  userReady = true;
+  Sound.arm();
+  askNotify();
   toast(`Iniciado: ${label || model.name}`, '', 2500);
 };
 
@@ -974,19 +1329,98 @@ window.togglePanel = function() {
 };
 
 /* ─── Main loop ───────────────────────────────────────────────── */
-function tick() { updateClock(); checkAlerts(); renderTimers(); }
+
+/* Alguns navegadores reduzem o setInterval em segundo plano. Este setTimeout
+   é agendado exatamente para o instante do próximo alarme, como reforço. */
+let _wakeT = null, _wakeAt = 0;
+function scheduleWake() {
+  const n = now();
+  let next = Infinity;
+  timers.forEach(t => {
+    if (t.phase === 'mold'   && t.moldEnd   > n) next = Math.min(next, t.moldEnd);
+    if (t.phase === 'demold' && t.demoldEnd > n) next = Math.min(next, t.demoldEnd);
+  });
+  if (next === Infinity) {
+    if (_wakeT) { clearTimeout(_wakeT); _wakeT = null; _wakeAt = 0; }
+    return;
+  }
+  if (_wakeT && _wakeAt === next) return;
+  clearTimeout(_wakeT);
+  _wakeAt = next;
+  _wakeT = setTimeout(() => { _wakeT = null; _wakeAt = 0; tick(); },
+                      Math.max(0, (next - now()) * 1000) + 120);
+}
+
+/* Liga/desliga o loop silencioso conforme existam timers, e escreve o card
+   da tela de bloqueio. */
+function syncSound() {
+  if (bgAlarm && userReady && timers.length && !Sound.armed) Sound.arm();
+  if (Sound.armed && !timers.length && !Sound.ringing) Sound.disarm();
+  if (!Sound.armed) return;
+
+  // Peças com alarme ativo: o card mostra o NOME e continua lá até você
+  // tocar no card, mesmo que o som já tenha sido silenciado.
+  const tocando = timers.filter(t => alarming.has(t.id));
+  if (tocando.length) {
+    const nomes = tocando.map(nomeDe);
+    const txt = nomes.length === 1 ? nomes[0]
+              : nomes.length === 2 ? `${nomes[0]} e ${nomes[1]}`
+              : `${nomes[0]} +${nomes.length - 1}`;
+    const acao = tocando[0].phase === 'ready' ? 'ESVAZIAR O MOLDE' : 'HORA DE DESMOLDAR';
+    Sound.meta(
+      '⚡ ' + (tocando.length === 1 ? acao.replace('HORA DE ', '') + ' — ' + txt : txt),
+      nomes.length > 1 ? `${nomes.length} peças esperando` : acao.toLowerCase(),
+      artFor(col(tocando[0].color).c, txt, acao)
+    );
+    return;
+  }
+
+  // Peças cujo alarme já foi silenciado mas que continuam esperando ação:
+  // seguem em primeiro plano no card, senão somem e a peça é esquecida.
+  const esperando = timers.filter(t => (t.phase === 'ready' || t.phase === 'done') && !alarming.has(t.id));
+  if (esperando.length) {
+    const nomes = esperando.map(nomeDe);
+    const txt = nomes.length === 1 ? nomes[0] : `${nomes[0]} +${nomes.length - 1}`;
+    const acao = esperando[0].phase === 'ready' ? 'ESVAZIAR O MOLDE' : 'DESMOLDAR';
+    Sound.meta(
+      nomes.length === 1 ? `${txt} — esperando você` : `${nomes.length} peças esperando`,
+      acao.toLowerCase(),
+      artFor(col(esperando[0].color).c, txt, acao)
+    );
+    return;
+  }
+
+  let nxt = 0, prox = null;
+  timers.forEach(t => {
+    const e = t.phase === 'mold' ? t.moldEnd : (t.phase === 'demold' ? t.demoldEnd : 0);
+    if (e && (!nxt || e < nxt)) { nxt = e; prox = t; }
+  });
+  const ativos = timers.filter(t => t.phase === 'mold' || t.phase === 'demold').length;
+  Sound.meta(
+    ativos === 1 ? '1 timer ativo' : `${ativos} timers ativos`,
+    nxt ? `${nomeDe(prox)} às ${endsAt(nxt)}` : 'Slipcast Timer',
+    prox ? artFor(col(prox.color).c, nomeDe(prox), 'PRÓXIMO ALARME ' + endsAt(nxt))
+         : artFor('#7a3520', 'Slipcast', 'TIMER')
+  );
+}
+
+function tick() { updateClock(); checkAlerts(); renderTimers(); scheduleWake(); syncSound(); }
 
 load();
+renderBell();
 renderModels();
+initNotify();
 tick();
 setInterval(tick, 1000);
 
-// Show LAN hint when opened as local file (file:// protocol)
+// Ao voltar do bloqueio/segundo plano, recalcula na hora
+document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+window.addEventListener('focus', tick);
+window.addEventListener('pageshow', tick);
+
+// Aviso só quando aberto direto do arquivo (file://)
 if (window.location.protocol === 'file:') {
-  const hint = document.getElementById('lanHint');
-  const urlEl = document.getElementById('lanUrl');
-  hint.style.display = 'block';
-  urlEl.textContent = 'http://192.168.0.112:7720/slipcast-timer.html';
+  document.getElementById('lanHint').style.display = 'block';
 }
 
 /* ─── Keyboard shortcuts ──────────────────────────────────────── */
@@ -1002,9 +1436,17 @@ document.getElementById('overlay').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeModal();
 });
 
-// iOS: desbloqueia AudioContext em qualquer toque na tela
-document.addEventListener('touchstart', unlockAudio, { passive: true });
-document.addEventListener('touchend',   unlockAudio, { passive: true });
+// Qualquer toque na tela libera o áudio: desbloqueia o AudioContext (plano B)
+// e arma o loop silencioso que mantém o alarme vivo com o aparelho bloqueado.
+function onUserGesture() {
+  userReady = true;
+  unlockAudio();
+  Sound.init();
+  if (bgAlarm && !Sound.armed && timers.length) Sound.arm();
+}
+document.addEventListener('touchstart', onUserGesture, { passive: true });
+document.addEventListener('touchend',   onUserGesture, { passive: true });
+document.addEventListener('mousedown',  onUserGesture);
 
 ['fName','fMold','fDemold'].forEach(id => {
   document.getElementById(id).addEventListener('keydown', e => {
@@ -1048,10 +1490,7 @@ if (isIOS && !localStorage.getItem('sc_pwa_dismissed')) {
   showBanner('📲 Para instalar: toque em  ⎙  → "Adicionar à Tela de Início"', false);
 }
 
-// Register service worker
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/slipcast-timer/sw.js').catch(() => {});
-}
+// (o service worker é registrado por initNotify, com caminho relativo)
 </script>
 </body>
 </html>

@@ -64,6 +64,11 @@ body {
 }
 .hbtn:active { background: rgba(255,255,255,.32); }
 .hbtn.off { opacity: .42; }
+.hbtn.alerta {
+  background: #c0392b; border-color: #e74c3c;
+  animation: pulse-bell 1.4s ease-in-out infinite;
+}
+@keyframes pulse-bell { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
 
 /* ── Barra de alarme tocando ────────────────────────────────────── */
 .alarm-bar {
@@ -655,7 +660,8 @@ function buildSounds() {
 
 const Sound = {
   el: null, ready: false, armed: false, ringing: false,
-  _switching: false, _metaKey: '',
+  blocked: false,          // navegador recusou tocar: precisa de um toque
+  _switching: false, _metaKey: '', _avisou: false,
 
   init() {
     if (this.ready) return;
@@ -691,21 +697,38 @@ const Sound = {
     return p;
   },
 
-  /* Liga o loop silencioso — precisa ser chamado a partir de um toque */
-  arm() {
+  /* Liga o loop silencioso — a 1ª reprodução exige um toque do usuário.
+     Se o navegador bloquear, NÃO fingimos que está armado: marcamos
+     `blocked`, o sino fica em alerta e avisamos. Um alarme que o usuário
+     acha que está ligado e não está é pior que nenhum alarme. */
+  arm(porToque) {
     if (!bgAlarm) return;
     this.init();
+    if (this.blocked && !porToque) return;   // já bloqueado: só reinsiste em toque
     this.armed = true;
-    if (!this.ringing) {
-      const p = this._play(SND.silence, true);
-      if (p && p.catch) p.catch(() => {});
-    }
     this.session();
     renderBell();
+    if (this.ringing) return;
+
+    const p = this._play(SND.silence, true);
+    if (!p || !p.then) return;
+    p.then(
+      () => { if (this.blocked) { this.blocked = false; renderBell(); } },
+      () => {
+        this.blocked = true;
+        this.armed = false;
+        renderBell();
+        if (!this._avisou) {
+          this._avisou = true;
+          toast('⚠️ Toque na tela para ligar o alarme de tela bloqueada', 'warn', 6000);
+        }
+      }
+    );
   },
 
   disarm() {
     this.armed = false;
+    this.blocked = false;
     this.ringing = false;
     showAlarmBar(false);
     try { if (this.el) this.el.pause(); } catch(e) {}
@@ -744,7 +767,7 @@ const Sound = {
     if (!('mediaSession' in navigator)) return;
     try {
       navigator.mediaSession.playbackState = 'playing';
-      navigator.mediaSession.setActionHandler('play',  () => Sound.arm());
+      navigator.mediaSession.setActionHandler('play',  () => Sound.arm(true));
       navigator.mediaSession.setActionHandler('pause', () => Sound.ringing ? pararAlarmes() : Sound.disarm());
       navigator.mediaSession.setActionHandler('stop',  () => Sound.disarm());
     } catch(e) {}
@@ -819,18 +842,24 @@ window.stopAlarm = pararAlarmes;
 
 function renderBell() {
   const b = document.getElementById('bellBtn'); if (!b) return;
-  b.textContent = bgAlarm ? '🔔' : '🔕';
-  b.classList.toggle('off', !bgAlarm);
-  b.title = bgAlarm
-    ? 'Alarme toca com a tela bloqueada (ativado)'
-    : 'Alarme em segundo plano desativado';
+  if (!bgAlarm) {
+    b.textContent = '🔕'; b.className = 'hbtn off';
+    b.title = 'Alarme em segundo plano desativado';
+  } else if (Sound.blocked) {
+    // ligado, mas o áudio de fundo não está rodando de fato
+    b.textContent = '🔔'; b.className = 'hbtn alerta';
+    b.title = 'Toque na tela para ativar o alarme de tela bloqueada';
+  } else {
+    b.textContent = '🔔'; b.className = 'hbtn';
+    b.title = 'Alarme toca com a tela bloqueada (ativado)';
+  }
 }
 
 window.toggleBgAlarm = function() {
   bgAlarm = !bgAlarm;
   try { localStorage.setItem('sc_bgalarm', bgAlarm ? '1' : '0'); } catch(e) {}
   if (bgAlarm) {
-    Sound.arm();
+    Sound.arm(true);
     askNotify();
     toast('🔔 Alarme com a tela bloqueada ATIVADO', 'ok', 4000);
   } else {
@@ -1162,7 +1191,7 @@ window.startTimer = function() {
   save(); closeModal(); startSound();
   // este clique é o gesto do usuário que libera o áudio em segundo plano
   userReady = true;
-  Sound.arm();
+  Sound.arm(true);
   askNotify();
   toast(`Iniciado: ${label || model.name}`, '', 2500);
 };
@@ -1442,7 +1471,9 @@ function onUserGesture() {
   userReady = true;
   unlockAudio();
   Sound.init();
-  if (bgAlarm && !Sound.armed && timers.length) Sound.arm();
+  if (bgAlarm && !Sound.armed && timers.length) Sound.arm(true);
+  // timers restaurados de sessão anterior: aproveita o toque para pedir permissão
+  if (timers.length) askNotify();
 }
 document.addEventListener('touchstart', onUserGesture, { passive: true });
 document.addEventListener('touchend',   onUserGesture, { passive: true });

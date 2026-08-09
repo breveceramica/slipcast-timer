@@ -352,6 +352,17 @@ select:focus { border-color: var(--clay); }
 
 <div class="wrap">
 
+  <!-- Instalação: em aba do navegador o Android congela a página e o alarme
+       não toca. Por isso este aviso é permanente até o app ser instalado. -->
+  <div id="instalarAviso" style="display:none;background:#8a3a10;color:#fff;border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:.85rem;line-height:1.5">
+    <div style="margin-bottom:9px">
+      <strong>📲 Instale o app</strong> — na aba do navegador o sistema congela
+      a página e <strong>o alarme não toca com a tela bloqueada</strong>.
+    </div>
+    <div id="instalarComo" style="display:none;font-size:.82rem;opacity:.92;margin-bottom:9px"></div>
+    <button id="instalarBtn" class="btn btn-sm" style="background:#fff;color:#8a3a10;font-weight:700" onclick="instalarApp()">Instalar agora</button>
+  </div>
+
   <!-- Aviso quando aberto direto do arquivo (sem HTTPS não há notificação) -->
   <div id="lanHint" style="display:none;background:#1e4a7a;color:#fff;border-radius:10px;padding:11px 14px;margin-bottom:12px;font-size:.84rem;line-height:1.55">
     ⚠️ <strong>Aberto como arquivo local</strong> — o alarme sonoro funciona, mas
@@ -457,14 +468,6 @@ select:focus { border-color: var(--clay); }
 <div class="toasts" id="toasts"></div>
 
 <!-- PWA install banner (Android: auto; iOS: manual hint) -->
-<div id="installBanner" style="display:none;position:fixed;bottom:0;left:0;right:0;background:#5a2010;color:#fff;padding:13px 16px calc(13px + env(safe-area-inset-bottom));display:none;align-items:center;justify-content:space-between;gap:10px;z-index:3000;box-shadow:0 -3px 14px rgba(0,0,0,.28)">
-  <span id="installMsg" style="font-size:.86rem;line-height:1.4"></span>
-  <div style="display:flex;gap:8px;flex-shrink:0">
-    <button id="installBtn" style="display:none;background:#fff;color:#5a2010;border:none;padding:9px 16px;border-radius:8px;font-weight:700;font-size:.84rem;cursor:pointer;touch-action:manipulation" onclick="doInstall()">Instalar</button>
-    <button style="background:transparent;color:rgba(255,255,255,.65);border:none;padding:8px 10px;cursor:pointer;font-size:1rem;touch-action:manipulation" onclick="dismissBanner()">✕</button>
-  </div>
-</div>
-
 <script>
 'use strict';
 
@@ -571,7 +574,8 @@ function endsAt(ts) {
 const RATE = 22050;
 
 /* Gera um WAV (mono 16-bit) a partir de amostras e devolve uma blob URL */
-function encodeWav(samples) {
+function encodeWav(samples, rate) {
+  rate = rate || RATE;
   const len = samples.length;
   const buf = new ArrayBuffer(44 + len * 2);
   const dv  = new DataView(buf);
@@ -579,7 +583,7 @@ function encodeWav(samples) {
   str(0, 'RIFF');  dv.setUint32(4, 36 + len * 2, true);  str(8, 'WAVE');
   str(12, 'fmt '); dv.setUint32(16, 16, true);
   dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
-  dv.setUint32(24, RATE, true); dv.setUint32(28, RATE * 2, true);
+  dv.setUint32(24, rate, true); dv.setUint32(28, rate * 2, true);
   dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
   str(36, 'data'); dv.setUint32(40, len * 2, true);
   for (let i = 0; i < len; i++) {
@@ -590,19 +594,21 @@ function encodeWav(samples) {
 }
 
 /* Renderiza uma sequência de bipes {at, dur, f, v} em um buffer de totalSec */
-function renderTones(seq, totalSec) {
-  const n = Math.round(totalSec * RATE);
+function renderTones(seq, totalSec, rate, puro) {
+  rate = rate || RATE;
+  const n = Math.round(totalSec * rate);
   const out = new Float32Array(n);
   seq.forEach(t => {
-    const start = Math.round(t.at * RATE);
-    const count = Math.round(t.dur * RATE);
+    const start = Math.round(t.at * rate);
+    const count = Math.round(t.dur * rate);
     const w = 2 * Math.PI * t.f;
     for (let i = 0; i < count; i++) {
       const idx = start + i; if (idx >= n) break;
-      const s = i / RATE;
-      const env = Math.min(1, s / .006) * Math.min(1, (count - i) / (RATE * .02));
+      const s = i / rate;
+      const env = Math.min(1, s / .006) * Math.min(1, (count - i) / (rate * .02));
       // fundamental + 2º harmônico: mais audível em alto-falante de celular
-      out[idx] += (Math.sin(w * s) + .35 * Math.sin(2 * w * s)) / 1.35 * (t.v || .82) * env;
+      out[idx] += (puro ? Math.sin(w * s)
+                        : (Math.sin(w * s) + .35 * Math.sin(2 * w * s)) / 1.35) * (t.v || .82) * env;
     }
   });
   for (let i = 0; i < n; i++) out[i] = Math.max(-1, Math.min(1, out[i]));
@@ -690,26 +696,105 @@ function ehAborto(err) {
   return n === 'AbortError' || /interrupted|aborted/i.test((err && err.message) || '');
 }
 
+// Padrão do alarme: 3s que fecham em loop contínuo
+const SEQ_ALARME = [
+  { at: .00, dur: .20, f: 988 }, { at: .24, dur: .24, f: 740 },
+  { at: .56, dur: .20, f: 988 }, { at: .80, dur: .30, f: 740 },
+  { at: 1.30, dur: .20, f: 988 }, { at: 1.54, dur: .24, f: 740 },
+  { at: 1.86, dur: .20, f: 988 }, { at: 2.10, dur: .32, f: 740 },
+];
+
+/* ─── Faixa programada ───────────────────────────────────────────
+ * A peça central da solução. Medimos que a página CONGELA em segundo
+ * plano mesmo com áudio tocando — então não dá para confiar em um timer
+ * de JavaScript para disparar o alarme na hora.
+ *
+ * Em vez disso, geramos uma faixa única contendo:
+ *     [tom inaudível de 25 Hz pelo tempo exato que falta] + [alarme]
+ * e mandamos tocar. A reprodução de mídia acontece fora da thread de
+ * JavaScript, então o alarme soa na hora certa MESMO COM A PÁGINA
+ * TOTALMENTE CONGELADA. O JavaScript, quando estiver vivo, cuida só da
+ * interface e da notificação.
+ *
+ * 8 kHz mantém o arquivo pequeno (~4 MB no pior caso) e é de sobra para
+ * bipes de 988 Hz.
+ */
+// 4 kHz / 16 bits = 8 KB/s. A faixa precisa cobrir a espera INTEIRA (não só
+// os últimos minutos): se a página congela logo após a tela apagar, não haverá
+// JavaScript vivo depois para programá-la. Um molde de 25 min dá ~12 MB.
+const PROG_RATE  = 4000;
+const PROG_CAUDA = 90;    // segundos de alarme no fim da faixa
+const PROG_MAX   = 3600;  // teto de segurança para a espera (1h)
+
+function construirFaixaProgramada(segundos) {
+  const R = PROG_RATE;
+  const espera = Math.max(0, Math.round(Math.min(segundos, PROG_MAX) * R));
+  const cauda  = PROG_CAUDA * R;
+  const total  = espera + cauda;
+
+  const buf = new ArrayBuffer(44 + total * 2);
+  const dv  = new DataView(buf);
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i)); };
+  str(0,'RIFF');  dv.setUint32(4, 36 + total * 2, true);  str(8,'WAVE');
+  str(12,'fmt '); dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, R, true); dv.setUint32(28, R * 2, true);
+  dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  str(36,'data'); dv.setUint32(40, total * 2, true);
+  const pcm = new Int16Array(buf, 44, total);
+
+  // Espera: tom de 25 Hz repetido. Um período dá exatamente 160 amostras a
+  // 4 kHz, então basta repetir — geração instantânea mesmo para 40 minutos.
+  const per = R / 25;
+  const periodo = new Int16Array(per);
+  for (let i = 0; i < per; i++) periodo[i] = Math.round(Math.sin(2 * Math.PI * i / per) * 0.08 * 32767);
+  for (let i = 0; i < espera; i++) pcm[i] = periodo[i % per];
+
+  // Alarme: padrão de 3s repetido. Tom puro — a 4 kHz o 2º harmônico
+  // ficaria em cima de Nyquist e distorceria.
+  const pad = renderTones(SEQ_ALARME, 3.0, R, true);
+  const padI = new Int16Array(pad.length);
+  for (let i = 0; i < pad.length; i++) padI[i] = Math.round(Math.max(-1, Math.min(1, pad[i])) * 32767);
+  for (let i = 0; i < cauda; i++) pcm[espera + i] = padI[i % padI.length];
+
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+function proximoPrazo() {
+  const n = now();
+  let prox = 0;
+  timers.forEach(t => {
+    const e = t.phase === 'mold' ? t.moldEnd : (t.phase === 'demold' ? t.demoldEnd : 0);
+    if (e && e > n && (!prox || e < prox)) prox = e;
+  });
+  return prox;
+}
+
 const SND = {};
 function buildSounds() {
-  // 1s de "silêncio" (amplitude mínima, inaudível) — mantém a sessão viva
+  // Loop de manutenção: 1s de tom de 25 Hz.
+  //
+  // NÃO pode ser silêncio digital. O Chrome/Android só deixa de congelar uma
+  // aba em segundo plano se ela estiver tocando áudio AUDÍVEL — um sinal de
+  // amplitude ~0 é classificado como silêncio e a aba é congelada, matando os
+  // timers. 25 Hz resolve os dois lados: energia suficiente para o navegador
+  // contar como áudio real, e abaixo da resposta de qualquer alto-falante de
+  // celular (que corta abaixo de ~300 Hz), portanto inaudível.
+  // 25 ciclos em 1s fecham exatamente, então o loop não estala.
   const sil = new Float32Array(RATE);
-  for (let i = 0; i < sil.length; i++) sil[i] = (i % 2 ? 1 : -1) * 0.00004;
+  for (let i = 0; i < sil.length; i++) sil[i] = Math.sin(2 * Math.PI * 25 * i / RATE) * 0.08;
   SND.silence = encodeWav(sil);
 
-  // Alarme: 3s pensados para tocar em loop contínuo
-  SND.alert = encodeWav(renderTones([
-    { at: .00, dur: .20, f: 988 }, { at: .24, dur: .24, f: 740 },
-    { at: .56, dur: .20, f: 988 }, { at: .80, dur: .30, f: 740 },
-    { at: 1.30, dur: .20, f: 988 }, { at: 1.54, dur: .24, f: 740 },
-    { at: 1.86, dur: .20, f: 988 }, { at: 2.10, dur: .32, f: 740 },
-  ], 3.0));
+  SND.alert = encodeWav(renderTones(SEQ_ALARME, 3.0));
 }
 
 const Sound = {
   el: null, ready: false, armed: false, ringing: false,
   blocked: false,          // navegador recusou tocar: precisa de um toque
   _trocaAte: 0,            // ignora eventos de pause causados por troca de faixa
+  _progAte: 0,             // prazo coberto pela faixa programada
+  _progAtivo: false,       // a faixa programada é a que está tocando
+  _progUrl: null,
   _metaKey: '', _avisou: false, _retomadas: 0,
 
   init() {
@@ -721,6 +806,13 @@ const Sound = {
       el.loop = true;
       el.src = SND.silence;
       // pausa vinda do sistema (lockscreen, fones) = usuário quer parar
+      el.addEventListener('ended', () => {
+        DIAG.add('audio:ended', this._progAtivo ? '(fim da faixa programada)' : '');
+        this._progAtivo = false;
+        if (alarming.size) { this.ringing = true; this._play(SND.alert, true); }
+        else this.rest();
+      });
+
       // Registra tudo o que o sistema faz com o áudio
       ['play','playing','waiting','stalled','suspend','ended','error','emptied'].forEach(ev => {
         el.addEventListener(ev, () => DIAG.add('audio:' + ev, ev === 'error' && el.error ? 'code ' + el.error.code : ''));
@@ -746,6 +838,7 @@ const Sound = {
     // trocar o src dispara load(), que emite 'pause' e aborta o play() pendente;
     // esta janela faz os dois serem ignorados como ruído da troca
     this._trocaAte = Date.now() + 600;
+    this._progAtivo = false;
     let p = null;
     try {
       if (el.src !== src) el.src = src;
@@ -807,6 +900,18 @@ const Sound = {
     // que existe alarme em curso, senão desarma o loop de manutenção
     this.ringing = true;
     this._retomadas = 0;
+
+    // Se a faixa programada já está tocando o alarme na hora certa, não
+    // trocar nada — trocar só criaria um engasgo no som que já está correto.
+    if (this._progAtivo && this.el && !this.el.paused) {
+      DIAG.add('ALARME disparado', 'som já vinha da faixa programada');
+      this._progAte = 0;
+      showAlarmBar(true);
+      buzz([400, 180, 400, 180, 600]);
+      this.session();
+      return;
+    }
+
     const p = this._play(SND.alert, true);
     if (p && p.catch) p.catch(err => { if (!ehAborto(err)) alarmBeep(); });  // plano B
     if (!p) alarmBeep();
@@ -831,6 +936,39 @@ const Sound = {
     });
   },
 
+  /* Gera e toca a faixa que já contém o alarme na posição certa.
+     É o que faz o alarme soar mesmo se a página congelar. */
+  programar() {
+    if (!this.armed || this.ringing || alarming.size) return;
+    const prazo = proximoPrazo();
+    const faltam = prazo ? prazo - now() : 0;
+
+    if (!prazo) {
+      if (this._progAtivo) { DIAG.add('faixa programada cancelada'); this.rest(); }
+      this._progAte = 0;
+      return;
+    }
+    // já programado para este prazo e tocando: nada a fazer
+    if (this._progAte === prazo && this._progAtivo && this.el && !this.el.paused) return;
+
+    let url;
+    try { url = construirFaixaProgramada(faltam); }
+    catch(e) { DIAG.add('falha ao gerar faixa programada', String(e && e.name)); return; }
+
+    const anterior = this._progUrl;
+    this._progUrl = url;
+    this._progAte = prazo;
+    DIAG.add('FAIXA PROGRAMADA', faltam + 's até o alarme');
+    const p = this._play(url, false);
+    this._progAtivo = true;
+    if (p && p.catch) p.catch(err => {
+      if (ehAborto(err)) return;
+      this._progAtivo = false;
+      DIAG.add('faixa programada RECUSADA', (err && err.name) || 'erro');
+    });
+    if (anterior) { try { URL.revokeObjectURL(anterior); } catch(e) {} }
+  },
+
   stopRing() {
     if (!this.ringing) return;
     this.ringing = false;
@@ -840,6 +978,7 @@ const Sound = {
 
   /* Estado de repouso: silêncio se ainda houver timer ativo, senão pausa */
   rest() {
+    this._progAte = 0;
     if (this.armed && timers.length) this._play(SND.silence, true);
     else { try { if (this.el) this.el.pause(); } catch(e) {} }
   },
@@ -1285,6 +1424,51 @@ window.startTimer = function() {
   toast(`Iniciado: ${label || model.name}`, '', 2500);
 };
 
+/* ─── Instalação ──────────────────────────────────────────────────
+ * Instalar deixou de ser cosmético: em aba do navegador o Android congela a
+ * página com a tela bloqueada e o alarme não dispara. Por isso o aviso é
+ * permanente (não some ao ser dispensado) enquanto não estiver instalado. */
+function estaInstalado() {
+  try {
+    return window.matchMedia('(display-mode: standalone)').matches
+        || window.navigator.standalone === true
+        || document.referrer.startsWith('android-app://');
+  } catch(e) { return false; }
+}
+
+function renderInstalar() {
+  const box = document.getElementById('instalarAviso');
+  if (!box) return;
+  if (estaInstalado() || window.location.protocol === 'file:') { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+
+  const ehIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const btn = document.getElementById('instalarBtn');
+  const como = document.getElementById('instalarComo');
+
+  if (_installPrompt) {                    // Chrome/Android com convite pronto
+    btn.style.display = ''; como.style.display = 'none';
+  } else if (ehIOS) {                      // iOS nunca tem convite automático
+    btn.style.display = 'none';
+    como.style.display = 'block';
+    como.innerHTML = 'No iPhone: toque em <strong>⎙ Compartilhar</strong> → <strong>Adicionar à Tela de Início</strong>.';
+  } else {                                 // Android sem convite (já dispensado antes)
+    btn.style.display = 'none';
+    como.style.display = 'block';
+    como.innerHTML = 'No Android: menu <strong>⋮</strong> do navegador → <strong>Instalar app</strong> (ou "Adicionar à tela inicial").';
+  }
+}
+
+window.instalarApp = function() {
+  if (!_installPrompt) { renderInstalar(); return; }
+  _installPrompt.prompt();
+  _installPrompt.userChoice.then(r => {
+    DIAG.add('escolha da instalação', r && r.outcome);
+    _installPrompt = null;
+    renderInstalar();
+  }).catch(() => {});
+};
+
 /* ─── Diagnóstico (UI) ────────────────────────────────────────── */
 window.verDiagnostico = function() {
   document.getElementById('diagTexto').textContent = DIAG.texto();
@@ -1525,6 +1709,8 @@ function syncSound() {
   if (Sound.ringing && !alarming.size) Sound.stopRing();
   // vigia: deveria estar tocando e não está (caso o evento pause escape)
   if (Sound.ringing && alarming.size && Sound.el && Sound.el.paused) Sound.retomar('vigia');
+  // programa o alarme dentro do próprio áudio, para sobreviver ao congelamento
+  Sound.programar();
 
   if (!timers.length) {
     // nada para alarmar: limpa o estado de bloqueio para não alertar à toa,
@@ -1582,11 +1768,24 @@ function syncSound() {
   );
 }
 
-function tick() { updateClock(); checkAlerts(); renderTimers(); scheduleWake(); syncSound(); }
+/* Se o intervalo de 1s não rodou por vários segundos, a página foi congelada
+   pelo sistema — é exatamente isso que o loop de manutenção deve impedir. */
+let _ultimoTick = 0;
+function batimento() {
+  const agora = Date.now();
+  if (_ultimoTick) {
+    const gap = Math.round((agora - _ultimoTick) / 1000);
+    if (gap >= 4) DIAG.add('⚠️ PÁGINA CONGELOU', gap + 's sem rodar');
+  }
+  _ultimoTick = agora;
+}
+
+function tick() { batimento(); updateClock(); checkAlerts(); renderTimers(); scheduleWake(); syncSound(); }
 
 load();
 DIAG.load();
-DIAG.add('app aberto');
+DIAG.add('app aberto', (estaInstalado() ? 'INSTALADO' : 'aba do navegador') +
+  ', notif=' + (('Notification' in window) ? Notification.permission : 'indisponível'));
 renderBell();
 renderModels();
 initNotify();
@@ -1595,7 +1794,14 @@ setInterval(tick, 1000);
 
 // Ao voltar do bloqueio/segundo plano, recalcula na hora
 document.addEventListener('visibilitychange', () => {
-  DIAG.add(document.hidden ? '— tela apagou / app ao fundo —' : '— voltou à tela —');
+  if (document.hidden) {
+    const el = Sound.el;
+    DIAG.add('— tela apagou / app ao fundo —',
+      'áudio ' + (el && !el.paused ? 'TOCANDO' : 'parado') +
+      ', armado ' + (Sound.armed ? 'sim' : 'não'));
+  } else {
+    DIAG.add('— voltou à tela —');
+  }
   if (!document.hidden) tick();
 });
 window.addEventListener('focus', tick);
@@ -1646,38 +1852,22 @@ document.addEventListener('mousedown',  onUserGesture);
 /* ─── PWA ─────────────────────────────────────────────────────── */
 let _installPrompt = null;
 
-function showBanner(msg, showBtn) {
-  const b = document.getElementById('installBanner');
-  document.getElementById('installMsg').textContent = msg;
-  document.getElementById('installBtn').style.display = showBtn ? '' : 'none';
-  b.style.display = 'flex';
-}
-
-window.doInstall = function() {
-  if (!_installPrompt) return;
-  _installPrompt.prompt();
-  _installPrompt.userChoice.then(() => { _installPrompt = null; dismissBanner(); });
-};
-
-window.dismissBanner = function() {
-  document.getElementById('installBanner').style.display = 'none';
-  try { localStorage.setItem('sc_pwa_dismissed', '1'); } catch(e) {}
-};
-
-// Android: intercept install prompt
+// O Chrome só oferece instalar uma vez; guardamos o convite para o botão.
 window.addEventListener('beforeinstallprompt', e => {
   e.preventDefault();
   _installPrompt = e;
-  if (!localStorage.getItem('sc_pwa_dismissed')) {
-    showBanner('📲 Instalar o Slipcast Timer como app?', true);
-  }
+  DIAG.add('convite de instalação disponível');
+  renderInstalar();
 });
 
-// iOS Safari: show manual instructions once
-const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.navigator.standalone;
-if (isIOS && !localStorage.getItem('sc_pwa_dismissed')) {
-  showBanner('📲 Para instalar: toque em  ⎙  → "Adicionar à Tela de Início"', false);
-}
+window.addEventListener('appinstalled', () => {
+  _installPrompt = null;
+  DIAG.add('app INSTALADO');
+  toast('App instalado — abra pelo ícone na tela de início', 'ok', 6000);
+  renderInstalar();
+});
+
+renderInstalar();
 
 // (o service worker é registrado por initNotify, com caminho relativo)
 </script>

@@ -382,6 +382,9 @@ select:focus { border-color: var(--clay); }
         <button class="btn btn-primary btn-sm" id="saveModelBtn" onclick="saveModel()">Salvar</button>
         <button class="btn btn-ghost btn-sm" id="cancelEditBtn" onclick="cancelEdit()" style="display:none">Cancelar</button>
       </div>
+      <div style="display:flex;justify-content:flex-end;border-top:1px solid var(--border);padding-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="verDiagnostico()">🩺 Diagnóstico do alarme</button>
+      </div>
     </div>
   </div>
 
@@ -429,6 +432,22 @@ select:focus { border-color: var(--clay); }
     <div class="mf-foot">
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="startTimer()">▶ Iniciar</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="diagOverlay">
+  <div class="modal">
+    <h3>🩺 Diagnóstico do alarme</h3>
+    <p style="font-size:.82rem;color:var(--muted);margin-bottom:10px;line-height:1.5">
+      Registro do que o sistema fez com o áudio. Se o alarme falhar com a tela
+      bloqueada, abra aqui depois de destravar e me mostre.
+    </p>
+    <pre id="diagTexto" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:11px;font-size:.72rem;line-height:1.6;max-height:46vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace"></pre>
+    <div class="mf-foot">
+      <button class="btn btn-ghost" onclick="limparDiagnostico()">Limpar</button>
+      <button class="btn btn-ghost" onclick="copiarDiagnostico()">Copiar</button>
+      <button class="btn btn-primary" onclick="fecharDiagnostico()">Fechar</button>
     </div>
   </div>
 </div>
@@ -646,6 +665,31 @@ function artFor(hex, big, small) {
   } catch(e) { return null; }
 }
 
+/* ─── Diagnóstico ─────────────────────────────────────────────────
+ * O comportamento com a tela bloqueada não dá para reproduzir no
+ * computador. Este registro grava os eventos do elemento de áudio em
+ * localStorage para poder ser lido depois que a tela é desbloqueada. */
+const DIAG = {
+  max: 140,
+  itens: [],
+  load() { try { this.itens = JSON.parse(localStorage.getItem('sc_diag') || '[]'); } catch(e) { this.itens = []; } },
+  add(ev, extra) {
+    const t = new Date();
+    this.itens.push(`${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())} ${ev}${extra ? ' — ' + extra : ''}`);
+    if (this.itens.length > this.max) this.itens = this.itens.slice(-this.max);
+    try { localStorage.setItem('sc_diag', JSON.stringify(this.itens)); } catch(e) {}
+  },
+  texto() { return this.itens.length ? this.itens.join('\n') : '(sem registros ainda)'; },
+  limpar() { this.itens = []; try { localStorage.removeItem('sc_diag'); } catch(e) {} },
+};
+
+/* AbortError = o play() foi cancelado por uma troca de src nossa. Não é
+   bloqueio do navegador e não pode ser tratado como tal. */
+function ehAborto(err) {
+  const n = (err && err.name) || '';
+  return n === 'AbortError' || /interrupted|aborted/i.test((err && err.message) || '');
+}
+
 const SND = {};
 function buildSounds() {
   // 1s de "silêncio" (amplitude mínima, inaudível) — mantém a sessão viva
@@ -665,7 +709,8 @@ function buildSounds() {
 const Sound = {
   el: null, ready: false, armed: false, ringing: false,
   blocked: false,          // navegador recusou tocar: precisa de um toque
-  _switching: false, _metaKey: '', _avisou: false,
+  _trocaAte: 0,            // ignora eventos de pause causados por troca de faixa
+  _metaKey: '', _avisou: false, _retomadas: 0,
 
   init() {
     if (this.ready) return;
@@ -676,8 +721,19 @@ const Sound = {
       el.loop = true;
       el.src = SND.silence;
       // pausa vinda do sistema (lockscreen, fones) = usuário quer parar
+      // Registra tudo o que o sistema faz com o áudio
+      ['play','playing','waiting','stalled','suspend','ended','error','emptied'].forEach(ev => {
+        el.addEventListener(ev, () => DIAG.add('audio:' + ev, ev === 'error' && el.error ? 'code ' + el.error.code : ''));
+      });
+
       el.addEventListener('pause', () => {
-        if (this.armed && !this._switching) { this.armed = false; renderBell(); }
+        const trocando = Date.now() < this._trocaAte;
+        DIAG.add('audio:pause', trocando ? '(troca de faixa)' : (this.ringing ? 'DURANTE O ALARME' : ''));
+        if (trocando) return;
+        // Pausa que não pedimos, com alarme ativo: o sistema tirou o foco de
+        // áudio (notificação, chamada). Retoma em vez de desistir.
+        if (this.ringing && alarming.size) { this.retomar('pause inesperado'); return; }
+        if (this.armed) { this.armed = false; renderBell(); }
       });
       this.el = el;
       this.ready = true;
@@ -687,7 +743,9 @@ const Sound = {
   _play(src, loop) {
     this.init();
     const el = this.el; if (!el) return null;
-    this._switching = true;
+    // trocar o src dispara load(), que emite 'pause' e aborta o play() pendente;
+    // esta janela faz os dois serem ignorados como ruído da troca
+    this._trocaAte = Date.now() + 600;
     let p = null;
     try {
       if (el.src !== src) el.src = src;
@@ -696,8 +754,6 @@ const Sound = {
       try { el.currentTime = 0; } catch(e) {}
       p = el.play();
     } catch(e) {}
-    const done = () => { this._switching = false; };
-    if (p && p.then) p.then(done, done); else setTimeout(done, 0);
     return p;
   },
 
@@ -718,7 +774,9 @@ const Sound = {
     if (!p || !p.then) return;
     p.then(
       () => { if (this.blocked) { this.blocked = false; renderBell(); } },
-      () => {
+      (err) => {
+        if (ehAborto(err)) { DIAG.add('play abortado', 'troca de faixa — ignorado'); return; }
+        DIAG.add('play RECUSADO', (err && err.name) || 'erro');
         this.blocked = true;
         this.armed = false;
         renderBell();
@@ -745,13 +803,32 @@ const Sound = {
      de projeto: no ateliê a peça estraga se ninguém atender. */
   ring() {
     this.init();
-    const p = this._play(SND.alert, true);
-    if (p && p.catch) p.catch(() => alarmBeep());   // plano B: Web Audio
-    if (!p) alarmBeep();
+    // ringing ANTES de tocar: o evento pause da troca de faixa precisa saber
+    // que existe alarme em curso, senão desarma o loop de manutenção
     this.ringing = true;
+    this._retomadas = 0;
+    const p = this._play(SND.alert, true);
+    if (p && p.catch) p.catch(err => { if (!ehAborto(err)) alarmBeep(); });  // plano B
+    if (!p) alarmBeep();
     showAlarmBar(true);
     buzz([400, 180, 400, 180, 600]);
     this.session();
+    DIAG.add('ALARME disparado');
+    if (p && p.then) p.then(() => DIAG.add('alarme tocando ok'),
+                            err => { if (!ehAborto(err)) DIAG.add('alarme NÃO tocou', (err && err.name) || 'erro'); });
+  },
+
+  /* Retoma o alarme após uma pausa imposta pelo sistema */
+  retomar(motivo) {
+    if (!this.ringing || !alarming.size) return;
+    if (this._retomadas >= 25) { DIAG.add('desisti de retomar', motivo); return; }
+    this._retomadas++;
+    DIAG.add('retomando alarme', motivo + ' #' + this._retomadas);
+    const p = this._play(SND.alert, true);
+    if (p && p.catch) p.catch(err => {
+      if (ehAborto(err)) return;
+      DIAG.add('retomada FALHOU', (err && err.name) || 'erro'); alarmBeep();
+    });
   },
 
   stopRing() {
@@ -819,15 +896,23 @@ function askNotify() {
 function notify(title, body, art) {
   try {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    if (!document.hidden) return;   // app à vista: o card na tela já avisa
+    if (!document.hidden) { DIAG.add('notificação pulada', 'app à vista'); return; }
+    // silent: true é ESSENCIAL — uma notificação com som próprio pede foco de
+    // áudio ao Android, que pausa a mídia da página e mata o alarme. Quem faz
+    // barulho aqui é o alarme, não a notificação.
     const opts = {
-      body, tag: 'slipcast', renotify: true, requireInteraction: true,
-      vibrate: [400, 180, 400, 180, 600], silent: false,
+      body, tag: 'slipcast', renotify: true, requireInteraction: true, silent: true,
     };
     if (art) { opts.icon = art; opts.badge = art; }
-    if (_swReg && _swReg.showNotification) { _swReg.showNotification(title, opts); return; }
-    const n = new Notification(title, opts);   // desktop
-    n.onclick = () => { try { window.focus(); } catch(e) {} n.close(); };
+    // pequeno atraso: deixa a reprodução do alarme se firmar antes
+    setTimeout(() => {
+      try {
+        if (_swReg && _swReg.showNotification) { _swReg.showNotification(title, opts); DIAG.add('notificação enviada'); return; }
+        const n = new Notification(title, opts);
+        n.onclick = () => { try { window.focus(); } catch(e) {} n.close(); };
+        DIAG.add('notificação enviada (desktop)');
+      } catch(e) { DIAG.add('notificação falhou', String(e && e.name)); }
+    }, 500);
   } catch(e) {}
 }
 
@@ -1200,6 +1285,26 @@ window.startTimer = function() {
   toast(`Iniciado: ${label || model.name}`, '', 2500);
 };
 
+/* ─── Diagnóstico (UI) ────────────────────────────────────────── */
+window.verDiagnostico = function() {
+  document.getElementById('diagTexto').textContent = DIAG.texto();
+  document.getElementById('diagOverlay').classList.add('open');
+};
+window.fecharDiagnostico = function() { document.getElementById('diagOverlay').classList.remove('open'); };
+window.limparDiagnostico = function() { DIAG.limpar(); document.getElementById('diagTexto').textContent = DIAG.texto(); };
+window.copiarDiagnostico = function() {
+  const t = DIAG.texto();
+  const ok = () => toast('Diagnóstico copiado', 'ok', 2500);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(ok, () => toast('Não consegui copiar — selecione o texto', '', 3000));
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = t; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); ok(); } catch(e) { toast('Não consegui copiar', '', 3000); }
+    ta.remove();
+  }
+};
+
 /* ─── Teste do alarme ─────────────────────────────────────────────
  * O comportamento de tela bloqueada depende do aparelho e não dá para
  * conferir sem esperar uma peça real. Este botão dispara o alarme de
@@ -1418,6 +1523,8 @@ function syncSound() {
   // stopAlarmIfSilent() deixaria o alarme tocando para sempre, sem card
   // na tela para silenciar.
   if (Sound.ringing && !alarming.size) Sound.stopRing();
+  // vigia: deveria estar tocando e não está (caso o evento pause escape)
+  if (Sound.ringing && alarming.size && Sound.el && Sound.el.paused) Sound.retomar('vigia');
 
   if (!timers.length) {
     // nada para alarmar: limpa o estado de bloqueio para não alertar à toa,
@@ -1478,6 +1585,8 @@ function syncSound() {
 function tick() { updateClock(); checkAlerts(); renderTimers(); scheduleWake(); syncSound(); }
 
 load();
+DIAG.load();
+DIAG.add('app aberto');
 renderBell();
 renderModels();
 initNotify();
@@ -1485,7 +1594,10 @@ tick();
 setInterval(tick, 1000);
 
 // Ao voltar do bloqueio/segundo plano, recalcula na hora
-document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+document.addEventListener('visibilitychange', () => {
+  DIAG.add(document.hidden ? '— tela apagou / app ao fundo —' : '— voltou à tela —');
+  if (!document.hidden) tick();
+});
 window.addEventListener('focus', tick);
 window.addEventListener('pageshow', tick);
 
@@ -1505,6 +1617,10 @@ document.addEventListener('keydown', e => {
 
 document.getElementById('overlay').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeModal();
+});
+
+document.getElementById('diagOverlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) fecharDiagnostico();
 });
 
 // Qualquer toque na tela libera o áudio: desbloqueia o AudioContext (plano B)

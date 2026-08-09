@@ -13,7 +13,7 @@
  *    segundo plano, então a próxima abertura já pega a versão nova.
  */
 
-const CACHE = 'slipcast-v6';
+const CACHE = 'slipcast-v7';
 const ARQUIVOS = [
   './',
   './index.html',

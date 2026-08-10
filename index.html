@@ -722,9 +722,17 @@ const SEQ_ALARME = [
 // 4 kHz / 16 bits = 8 KB/s. A faixa precisa cobrir a espera INTEIRA (não só
 // os últimos minutos): se a página congela logo após a tela apagar, não haverá
 // JavaScript vivo depois para programá-la. Um molde de 25 min dá ~12 MB.
-const PROG_RATE  = 4000;
-const PROG_CAUDA = 90;    // segundos de alarme no fim da faixa
-const PROG_MAX   = 3600;  // teto de segurança para a espera (1h)
+// 8 kHz: taxa de telefonia, aceita por todo decodificador. Medido que 2 kHz é
+// RECUSADO (MEDIA_ERR_SRC_NOT_SUPPORTED) e 4 kHz, embora funcione em alguns
+// navegadores, não é garantido — não vale arriscar a fonte inválida, que
+// trava o elemento e derruba TODO o som, inclusive o alarme comum.
+const PROG_RATE  = 8000;
+const PROG_CAUDA = 60;    // segundos de alarme no fim da faixa
+const PROG_LEAD  = 600;   // programa a partir de 10 min do prazo (~10 MB máx.)
+const PROG_MAX   = 3600;
+
+// Nyquist a 8 kHz é 4 kHz: o alarme original (988/740 Hz) cabe sem alteração.
+const SEQ_ALARME_PROG = SEQ_ALARME;
 
 function construirFaixaProgramada(segundos) {
   const R = PROG_RATE;
@@ -752,7 +760,7 @@ function construirFaixaProgramada(segundos) {
 
   // Alarme: padrão de 3s repetido. Tom puro — a 4 kHz o 2º harmônico
   // ficaria em cima de Nyquist e distorceria.
-  const pad = renderTones(SEQ_ALARME, 3.0, R, true);
+  const pad = renderTones(SEQ_ALARME_PROG, 3.0, R, true);
   const padI = new Int16Array(pad.length);
   for (let i = 0; i < pad.length; i++) padI[i] = Math.round(Math.max(-1, Math.min(1, pad[i])) * 32767);
   for (let i = 0; i < cauda; i++) pcm[espera + i] = padI[i % padI.length];
@@ -794,6 +802,9 @@ const Sound = {
   _trocaAte: 0,            // ignora eventos de pause causados por troca de faixa
   _progAte: 0,             // prazo coberto pela faixa programada
   _progAtivo: false,       // a faixa programada é a que está tocando
+  _progAlarmeEm: 0,        // posição (s) em que o alarme começa nessa faixa
+  _progUltima: 0,          // trava contra reconstruções em rajada
+  _progReprovada: false,   // o navegador recusou a faixa programada
   _progUrl: null,
   _metaKey: '', _avisou: false, _retomadas: 0,
 
@@ -814,8 +825,20 @@ const Sound = {
       });
 
       // Registra tudo o que o sistema faz com o áudio
-      ['play','playing','waiting','stalled','suspend','ended','error','emptied'].forEach(ev => {
-        el.addEventListener(ev, () => DIAG.add('audio:' + ev, ev === 'error' && el.error ? 'code ' + el.error.code : ''));
+      ['play','playing','waiting','stalled','suspend','emptied'].forEach(ev => {
+        el.addEventListener(ev, () => DIAG.add('audio:' + ev));
+      });
+
+      // Se a fonte for recusada, o elemento fica inutilizável e NADA mais toca
+      // — nem o alarme comum. Volta imediatamente para uma faixa que funciona.
+      el.addEventListener('error', () => {
+        const code = el.error ? el.error.code : '?';
+        DIAG.add('audio:error', 'code ' + code + (this._progAtivo ? ' (faixa programada)' : ''));
+        this._progAtivo = false;
+        this._progAte = 0;
+        this._progReprovada = true;      // não tenta programar de novo nesta sessão
+        if (this.ringing && alarming.size) this._play(SND.alert, true);
+        else if (this.armed && timers.length) this._play(SND.silence, true);
       });
 
       el.addEventListener('pause', () => {
@@ -901,15 +924,23 @@ const Sound = {
     this.ringing = true;
     this._retomadas = 0;
 
-    // Se a faixa programada já está tocando o alarme na hora certa, não
-    // trocar nada — trocar só criaria um engasgo no som que já está correto.
-    if (this._progAtivo && this.el && !this.el.paused) {
+    // A faixa programada só é aproveitada se o ponteiro REALMENTE já chegou
+    // ao trecho do alarme. Confiar apenas em "está tocando" era um erro: se o
+    // áudio estiver atrasado (blob carregando, retomada), o trecho em execução
+    // ainda é o tom inaudível — e o alarme sairia mudo.
+    const naParteDoAlarme = this._progAtivo && this.el && !this.el.paused
+      && this._progAlarmeEm > 0 && this.el.currentTime >= this._progAlarmeEm - 1.5;
+    if (naParteDoAlarme) {
       DIAG.add('ALARME disparado', 'som já vinha da faixa programada');
       this._progAte = 0;
       showAlarmBar(true);
       buzz([400, 180, 400, 180, 600]);
       this.session();
       return;
+    }
+    if (this._progAtivo) {
+      DIAG.add('faixa programada atrasada', 'pos=' + (this.el ? this.el.currentTime.toFixed(0) : '?') +
+               's, alarme em ' + this._progAlarmeEm + 's — tocando alarme direto');
     }
 
     const p = this._play(SND.alert, true);
@@ -944,12 +975,22 @@ const Sound = {
     const faltam = prazo ? prazo - now() : 0;
 
     if (!prazo) {
-      if (this._progAtivo) { DIAG.add('faixa programada cancelada'); this.rest(); }
-      this._progAte = 0;
+      if (this._progAte) { DIAG.add('faixa programada cancelada'); this._progAte = 0; this.rest(); }
       return;
     }
-    // já programado para este prazo e tocando: nada a fazer
-    if (this._progAte === prazo && this._progAtivo && this.el && !this.el.paused) return;
+    // Já programado para este prazo: não reconstruir. Carregar a faixa leva
+    // alguns segundos e o elemento fica `paused` nesse meio-tempo — tratar
+    // isso como motivo de reconstrução gerava um laço que impedia qualquer som.
+    // Fora da janela: o loop curto de manutenção (tom audível de 25 Hz) é quem
+    // segura a página viva até chegarmos perto do prazo.
+    if (faltam > PROG_LEAD) {
+      if (this._progAte) { DIAG.add('faixa programada cancelada'); this._progAte = 0; this.rest(); }
+      return;
+    }
+    if (this._progReprovada) return;    // já falhou uma vez: não insiste
+    if (this._progAte === prazo) return;
+    // trava: no máximo uma construção a cada 5s
+    if (Date.now() - this._progUltima < 5000) return;
 
     let url;
     try { url = construirFaixaProgramada(faltam); }
@@ -958,6 +999,8 @@ const Sound = {
     const anterior = this._progUrl;
     this._progUrl = url;
     this._progAte = prazo;
+    this._progAlarmeEm = faltam;      // segundo da faixa em que o alarme começa
+    this._progUltima = Date.now();
     DIAG.add('FAIXA PROGRAMADA', faltam + 's até o alarme');
     const p = this._play(url, false);
     this._progAtivo = true;
@@ -979,6 +1022,7 @@ const Sound = {
   /* Estado de repouso: silêncio se ainda houver timer ativo, senão pausa */
   rest() {
     this._progAte = 0;
+    this._progAlarmeEm = 0;
     if (this.armed && timers.length) this._play(SND.silence, true);
     else { try { if (this.el) this.el.pause(); } catch(e) {} }
   },

@@ -394,6 +394,7 @@ select:focus { border-color: var(--clay); }
         <button class="btn btn-ghost btn-sm" id="cancelEditBtn" onclick="cancelEdit()" style="display:none">Cancelar</button>
       </div>
       <div style="display:flex;justify-content:flex-end;border-top:1px solid var(--border);padding-top:10px">
+        <span id="versaoInfo" style="margin-right:auto;align-self:center;font-size:.72rem;color:var(--muted)"></span>
         <button class="btn btn-ghost btn-sm" onclick="verDiagnostico()">🩺 Diagnóstico do alarme</button>
       </div>
     </div>
@@ -471,6 +472,11 @@ select:focus { border-color: var(--clay); }
 <script>
 'use strict';
 
+// Qualquer erro no aparelho fica registrado no diagnóstico (lido à distância)
+window.addEventListener('error', e => {
+  try { DIAG.add('ERRO JS', (e.message || 'erro') + ' @linha ' + e.lineno); } catch(_) {}
+});
+
 /* ─── Palette ─────────────────────────────────────────────────── */
 const PAL = [
   { id:0, c:'#e74c3c', n:'Vermelho'  },
@@ -492,6 +498,7 @@ let done    = [];
 let nextCol = 0;
 let editId  = null;
 let selCol  = 0;
+const VERSAO = '2026.09.30';  // mostrada no rodapé da biblioteca e no diagnóstico
 let bgAlarm = true;    // alarme toca com a tela bloqueada
 let userReady = false; // já houve um toque na tela (libera o áudio)
 const expanded = new Set(); // which card IDs are expanded
@@ -1481,21 +1488,40 @@ function estaInstalado() {
 }
 
 function renderInstalar() {
+  const info = document.getElementById('versaoInfo');
+  if (info) info.textContent = 'v' + VERSAO + ' · ' + (estaInstalado() ? '✓ app instalado' : 'aba do navegador');
   const box = document.getElementById('instalarAviso');
   if (!box) return;
   if (estaInstalado() || window.location.protocol === 'file:') { box.style.display = 'none'; return; }
   box.style.display = 'block';
 
-  const ehIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const ua = navigator.userAgent;
+  // iPadOS se apresenta como "Macintosh"; o toque denuncia que é iPad
+  const ehIOS = /iphone|ipad|ipod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  // Navegador embutido (Instagram, Facebook, etc.): não tem "Adicionar à
+  // Tela de Início". Safari, Chrome, Firefox e Edge do iOS têm "Safari/" no UA.
+  const embutido = ehIOS && (!/Safari\//.test(ua) || /FBAN|FBAV|Instagram|Line\//.test(ua));
   const btn = document.getElementById('instalarBtn');
   const como = document.getElementById('instalarComo');
 
   if (_installPrompt) {                    // Chrome/Android com convite pronto
     btn.style.display = ''; como.style.display = 'none';
-  } else if (ehIOS) {                      // iOS nunca tem convite automático
+  } else if (embutido) {
     btn.style.display = 'none';
     como.style.display = 'block';
-    como.innerHTML = 'No iPhone: toque em <strong>⎙ Compartilhar</strong> → <strong>Adicionar à Tela de Início</strong>.';
+    como.innerHTML = 'Este link abriu dentro de outro app, que não permite instalar. ' +
+      'Toque em <strong>•••</strong> (ou no ícone de bússola) e escolha <strong>Abrir no Safari</strong>.';
+  } else if (ehIOS) {
+    // O iOS NUNCA mostra convite automático de instalação — é sempre manual.
+    // No iOS 26 o botão Compartilhar foi para dentro do menu •••.
+    btn.style.display = 'none';
+    como.style.display = 'block';
+    como.innerHTML = 'No iPhone/iPad não aparece convite automático — a instalação é manual:' +
+      '<ol style="margin:6px 0 0 18px;padding:0">' +
+      '<li>Toque em <strong>⎙ Compartilhar</strong> (no iOS 26: botão <strong>•••</strong> → Compartilhar)</li>' +
+      '<li>Role e toque em <strong>Adicionar à Tela de Início</strong></li>' +
+      '<li>Deixe <strong>Abrir como App Web</strong> ligado e toque em <strong>Adicionar</strong></li>' +
+      '<li>Abra pelo novo ícone <strong>Slipcast</strong></li></ol>';
   } else {                                 // Android sem convite (já dispensado antes)
     btn.style.display = 'none';
     como.style.display = 'block';
@@ -1828,7 +1854,7 @@ function tick() { batimento(); updateClock(); checkAlerts(); renderTimers(); sch
 
 load();
 DIAG.load();
-DIAG.add('app aberto', (estaInstalado() ? 'INSTALADO' : 'aba do navegador') +
+DIAG.add('app aberto v' + VERSAO, (estaInstalado() ? 'INSTALADO' : 'aba do navegador') +
   ', notif=' + (('Notification' in window) ? Notification.permission : 'indisponível'));
 renderBell();
 renderModels();
@@ -1912,6 +1938,20 @@ window.addEventListener('appinstalled', () => {
 });
 
 renderInstalar();
+
+if ('serviceWorker' in navigator) {
+  let recarregando = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (recarregando) return;
+    DIAG.add('nova versão do app assumiu');
+    if (timers.length) {
+      toast('Nova versão disponível — feche e abra o app quando não houver peças correndo', '', 6000);
+      return;
+    }
+    recarregando = true;
+    location.reload();
+  });
+}
 
 // (o service worker é registrado por initNotify, com caminho relativo)
 </script>

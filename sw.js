@@ -9,11 +9,15 @@
  *
  * 2. OFFLINE. Guarda o app em cache para ele abrir sem internet — no ateliê
  *    o WiFi cai, e um timer que não abre não serve pra nada.
- *    Estratégia: responde do cache na hora (rápido e offline) e atualiza em
- *    segundo plano, então a próxima abertura já pega a versão nova.
+ *
+ *    Página (HTML): REDE PRIMEIRO, cache só se estiver offline ou a rede
+ *    demorar mais de 4s. Antes era "cache primeiro, atualiza em segundo
+ *    plano", o que fazia cada versão nova só aparecer na abertura SEGUINTE —
+ *    e no iPhone isso deixava o app preso numa versão antiga.
+ *    Ícones e manifest: cache primeiro, atualizando em segundo plano.
  */
 
-const CACHE = 'slipcast-v9';
+const CACHE = 'slipcast-v10';
 const ARQUIVOS = [
   './',
   './index.html',
@@ -27,7 +31,7 @@ const ARQUIVOS = [
 self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE)
-      .then(c => c.addAll(ARQUIVOS))
+      .then(c => c.addAll(ARQUIVOS.map(u => new Request(u, { cache: 'reload' }))))
       .catch(() => {})          // um arquivo faltando não pode travar a instalação
       .then(() => self.skipWaiting())
   );
@@ -45,6 +49,27 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   if (new URL(req.url).origin !== self.location.origin) return;
+
+  // Navegação (a página em si): rede primeiro, com prazo
+  if (req.mode === 'navigate') {
+    e.respondWith((async () => {
+      const cache = await caches.open(CACHE);
+      try {
+        const res = await Promise.race([
+          fetch(new Request(req.url, { cache: 'no-cache', credentials: 'same-origin' })),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('lenta')), 4000)),
+        ]);
+        if (res && res.ok) cache.put('./', res.clone()).catch(() => {});
+        return res;
+      } catch (err) {
+        return (await cache.match(req, { ignoreSearch: true }))
+            || (await cache.match('./'))
+            || (await cache.match('./index.html'))
+            || new Response('Offline', { status: 503, statusText: 'Offline' });
+      }
+    })());
+    return;
+  }
 
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
